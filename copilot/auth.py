@@ -2,6 +2,7 @@
 
 Requests from this machine are trusted as before. Anyone else needs the shared APP_PASSWORD; a successful login sets
 a signed, expiring cookie. Without APP_PASSWORD there is no way in from outside: the copilot stays private by default.
+OPEN_ACCESS=1 drops the login altogether (anyone with the URL can use it, and spend the API keys).
 The prospect's call page (/sala/...) never needs a login.
 """
 
@@ -34,8 +35,12 @@ def cookie_valid(value: str | None, now: float | None = None) -> bool:
     return expires.isdigit() and int(expires) > (now or time.time()) and hmac.compare_digest(sig, sign("login:" + expires))
 
 
+def open_access() -> bool:
+    return os.environ.get("OPEN_ACCESS", "").strip() == "1"
+
+
 def authorized(headers: Mapping[str, Any], cookies: Mapping[str, str]) -> bool:
-    return is_local(headers) or cookie_valid(cookies.get(COOKIE))
+    return open_access() or is_local(headers) or cookie_valid(cookies.get(COOKIE))
 
 
 def password_ok(candidate: str) -> bool:

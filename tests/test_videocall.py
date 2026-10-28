@@ -90,3 +90,13 @@ def test_signaling_relays_between_host_and_guest(client):
     assert client.post(guest.format("send"), headers=PUBLIC, json={"type": "hack"}).status_code == 400
     client.post(guest.format("send"), headers=PUBLIC, json={"type": "answer", "sdp": "v=0"})
     assert client.get(host.format("poll"), headers=LOCAL).json() == [{"type": "answer", "sdp": "v=0"}]
+
+
+def test_open_access_drops_the_login(monkeypatch):
+    monkeypatch.setenv("OPEN_ACCESS", "1")
+    monkeypatch.delenv("APP_PASSWORD", raising=False)
+    with TestClient(app, base_url="http://localhost") as c:
+        assert c.get("/", headers=PUBLIC).status_code == 200
+        assert c.post("/api/sala", headers=PUBLIC).status_code == 200
+        with c.websocket_connect("/ws", headers=PUBLIC) as ws:
+            assert ws.receive_json()["type"] == "hello"
