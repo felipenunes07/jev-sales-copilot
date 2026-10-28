@@ -8,42 +8,73 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from . import constants as C
 from .engine import CallSession
-from .jev_client import JevJudge, resolve_api_key
-from .personalize import AnthropicPersonalizer, PersonalizeState, Personalizer, resolve_llm_key, should_personalize, verify_with_jev
+from .jev_client import JevJudge, make_judge, resolve_api_key
+from .personalize import PersonalizeState, make_personalizer, Personalizer, resolve_llm_key, should_personalize, verify_with_jev
 from .replay import list_calls, load_call
+from .videocall import SIGNAL_TYPES, Signaling, Tunnel, find_cloudflared, is_local, make_store, make_transcriber, new_room, room_valid
+from . import auth
 
 log = logging.getLogger("copilot.server")
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+NO_CACHE = {"Cache-Control": "no-store"}  # the UI changes often; never serve a stale page from the browser cache
+MEDIA_DIR = Path(__file__).resolve().parent.parent / "data" / "media"
 
 MAX_REAL_GAP_S = 6.0  # never wait longer than this between utterances, even at 1x
 MIN_GAP_S = 0.15
 
 
+def ensure_state(app: FastAPI) -> None:
+    """Create the shared clients once per process (also when a host does not run the ASGI lifespan)."""
+    if getattr(app.state, "ready", False):
+        return
+    app.state.judge = make_judge() if resolve_api_key() else None
+    if app.state.judge is None:
+        log.error("No API key found (TYPESAFE_API_KEY / JEV_API_KEY / OPENROUTER_API_KEY). The UI will load but Jev calls will fail.")
+    app.state.personalizer = make_personalizer()
+    if app.state.personalizer is None:
+        log.info("No LLM key: tailored phrasing disabled, generic playbook lines only.")
+    app.state.transcriber = make_transcriber()
+    app.state.signaling = Signaling(make_store())
+    app.state.tunnel = Tunnel(int(os.environ.get("PORT", "8000")))
+    app.state.ready = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.judge = JevJudge() if resolve_api_key() else None
-    if app.state.judge is None:
-        log.error("No API key found (TYPESAFE_API_KEY / JEV_API_KEY). The UI will load but Jev calls will fail.")
-    app.state.personalizer = AnthropicPersonalizer() if resolve_llm_key() else None
-    if app.state.personalizer is None:
-        log.info("No ANTHROPIC_API_KEY: tailored phrasing disabled, generic playbook lines only.")
+    ensure_state(app)
     yield
-    for name in ("judge", "personalizer"):
-        obj = getattr(app.state, name, None)
+    await app.state.tunnel.stop()
+    for obj in (app.state.judge, app.state.personalizer, app.state.transcriber, app.state.signaling.store):
         if obj is not None and hasattr(obj, "aclose"):
             await obj.aclose()
+    app.state.ready = False  # the clients above are closed; build new ones if the app starts again
 
 
 app = FastAPI(title="Sales Copilot (Jev)", lifespan=lifespan)
+PUBLIC_PATHS = ("/sala/", "/login")
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """The prospect's call page is public; everything else needs this machine or a signed-in rep."""
+    ensure_state(request.app)
+    path = request.url.path
+    if path.startswith(PUBLIC_PATHS) or auth.authorized(request.headers, request.cookies):
+        return await call_next(request)
+    if request.method == "GET" and not path.startswith(("/api/", "/media/")):
+        return RedirectResponse("/login", status_code=303)
+    return JSONResponse({"error": "login required"}, status_code=401)
 
 
 # ---------------------------------------------------------------------------
@@ -51,12 +82,133 @@ app = FastAPI(title="Sales Copilot (Jev)", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=NO_CACHE)
+
+
+@app.get("/login")
+async def login_page(error: str = "") -> HTMLResponse:
+    msg = ""
+    if error == "1":
+        msg = '<div class="err">Senha incorreta.</div>'
+    elif not auth.password():
+        msg = '<div class="err">O acesso externo está desligado: defina APP_PASSWORD no servidor.</div>'
+    return HTMLResponse(auth.LOGIN_PAGE.replace("{error}", msg), headers=NO_CACHE)
+
+
+@app.post("/login")
+async def login(request: Request) -> RedirectResponse:
+    form = parse_qs((await request.body()).decode(errors="replace"))
+    if not auth.password_ok((form.get("password") or [""])[0]):
+        return RedirectResponse("/login?error=1", status_code=303)
+    resp = RedirectResponse("/", status_code=303)
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    resp.set_cookie(auth.COOKIE, auth.make_cookie(), max_age=auth.SESSION_DAYS * 86400, httponly=True, secure=secure, samesite="lax")
+    return resp
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "model": C.MODEL, "has_api_key": bool(resolve_api_key()), "questions": len(C.QUESTIONS), "llm": C.LLM_MODEL if resolve_llm_key() else None}
+    return {"ok": True, "model": C.MODEL, "has_api_key": bool(resolve_api_key()), "questions": len(C.QUESTIONS), "llm": app.state.personalizer.model if getattr(app.state, "personalizer", None) else None}
+
+
+# ---------------------------------------------------------------------------
+# Video call: room + link, guest page, transcription, signaling (HTTP post + poll)
+# ---------------------------------------------------------------------------
+def ice_servers() -> list[dict[str, Any]]:
+    """STUN by default; set ICE_SERVERS (JSON list, e.g. a TURN service) for networks that block peer-to-peer."""
+    try:
+        extra = json.loads(os.environ.get("ICE_SERVERS", "") or "[]")
+    except json.JSONDecodeError:
+        extra = []
+    return [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}, *extra]
+
+
+@app.post("/api/sala")
+async def create_room(request: Request) -> dict[str, Any]:
+    room = new_room()
+    if is_local(request.headers):
+        public = await app.state.tunnel.ensure()  # on this machine, a Cloudflare quick tunnel makes the link reachable
+        guest_url, error = (f"{public}/sala/{room}" if public else None), app.state.tunnel.error
+    else:
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        guest_url, error = f"{proto}://{request.headers.get('host')}/sala/{room}", None
+    return {
+        "room": room,
+        "guest_url": guest_url,
+        "local_guest_url": f"http://localhost:{app.state.tunnel.port}/sala/{room}",
+        "tunnel_error": error,
+        "has_cloudflared": find_cloudflared() is not None,
+        "stt": app.state.transcriber.model if app.state.transcriber else None,
+        "ice": ice_servers(),
+    }
+
+
+@app.get("/sala/{room}")
+async def guest_page(room: str) -> Any:
+    if not room_valid(room):
+        return JSONResponse({"error": "sala não encontrada"}, status_code=404)
+    return FileResponse(STATIC_DIR / "sala.html", headers=NO_CACHE)
+
+
+@app.get("/sala/{room}/ice")
+async def guest_ice(room: str) -> Any:
+    if not room_valid(room):
+        return JSONResponse({"error": "sala não encontrada"}, status_code=404)
+    return ice_servers()
+
+
+def _signal_role(request: Request, room: str) -> str | None:
+    """`host` only for the rep (this machine or signed in); anyone with the link may be the guest."""
+    if not room_valid(room):
+        return None
+    role = "host" if request.query_params.get("role") == "host" else "guest"
+    if role == "host" and not auth.authorized(request.headers, request.cookies):
+        return None
+    return role
+
+
+@app.post("/sala/{room}/send")
+async def signal_send(room: str, request: Request) -> Any:
+    role = _signal_role(request, room)
+    if role is None:
+        return JSONResponse({"error": "sala não encontrada"}, status_code=404)
+    try:
+        msg = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "json inválido"}, status_code=400)
+    if not isinstance(msg, dict) or msg.get("type") not in SIGNAL_TYPES:
+        return JSONResponse({"error": "tipo de mensagem não permitido"}, status_code=400)
+    if msg["type"] == "peer-joined":
+        msg = {"type": "peer-joined", "role": role}
+    await app.state.signaling.send(room, role, msg)
+    return {"ok": True}
+
+
+@app.get("/sala/{room}/poll")
+async def signal_poll(room: str, request: Request) -> Any:
+    role = _signal_role(request, room)
+    if role is None:
+        return JSONResponse({"error": "sala não encontrada"}, status_code=404)
+    return await app.state.signaling.receive(room, role)
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request) -> dict[str, Any]:
+    if app.state.transcriber is None:
+        return {"text": "", "error": "defina OPENROUTER_API_KEY para transcrever a chamada"}
+    wav = await request.body()
+    if len(wav) < 44 + 16000:  # under ~0.5 s of audio
+        return {"text": ""}
+    return await app.state.transcriber(wav)
+
+
+@app.get("/media/{name}")
+async def media(name: str) -> Any:
+    """Local call recordings (data/media/, git-ignored); FileResponse serves byte ranges so the player can seek."""
+    path = (MEDIA_DIR / name).resolve()
+    if path.parent != MEDIA_DIR.resolve() or not path.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path)
 
 
 @app.get("/api/calls")
@@ -189,12 +341,12 @@ class Connection:
             }
         )
 
-    async def run_replay(self, call: dict[str, Any]) -> None:
+    async def run_replay(self, call: dict[str, Any], start: int = 0) -> None:
         assert self.session is not None
         utterances = call["utterances"]
-        prev_t = None
+        prev_t = float(utterances[start - 1]["t"]) if 0 < start <= len(utterances) else None
         try:
-            for u in utterances:
+            for u in utterances[start:]:
                 if prev_t is not None:
                     gap = min(MAX_REAL_GAP_S, max(0.0, float(u["t"]) - prev_t))
                     await asyncio.sleep(max(MIN_GAP_S, gap / max(0.1, self.speed)))
@@ -214,6 +366,10 @@ class Connection:
 
 @app.websocket("/ws")
 async def websocket(ws: WebSocket) -> None:
+    ensure_state(ws.app)
+    if not auth.authorized(ws.headers, ws.cookies):
+        await ws.close(code=4403)
+        return
     await ws.accept()
     conn = Connection(ws, ws.app.state.judge, getattr(ws.app.state, "personalizer", None))
     await conn.send(
@@ -221,7 +377,7 @@ async def websocket(ws: WebSocket) -> None:
             "type": "hello",
             "model": C.MODEL,
             "has_api_key": conn.session is not None,
-            "llm": C.LLM_MODEL if conn.personalizer is not None else None,
+            "llm": getattr(conn.personalizer, "model", C.LLM_MODEL) if conn.personalizer is not None else None,
             "personalize_skip_moves": sorted(C.PERSONALIZE_SKIP_MOVES),
             "calls": list_calls(),
             "playbook": C.PLAYBOOK,
@@ -262,11 +418,14 @@ async def handle_message(conn: Connection, msg: dict[str, Any]) -> None:
         except FileNotFoundError as e:
             await conn.send({"type": "error", "message": str(e)})
             return
-        session.reset()
-        conn.reset_personalization()
         conn.speed = float(msg.get("speed", 1.0))
-        await conn.send({"type": "reset", "call": call, "weights": session.weights_table()})
-        conn.replay_task = asyncio.create_task(conn.run_replay(call))
+        start = int(msg.get("from") or 0)
+        if not (msg.get("keep") and start):  # `keep` resumes a replay after a reconnect, on the restored session
+            start = 0
+            session.reset()
+            conn.reset_personalization()
+            await conn.send({"type": "reset", "call": call, "weights": session.weights_table()})
+        conn.replay_task = asyncio.create_task(conn.run_replay(call, start))
     elif kind == "pause":
         conn.paused.clear()
         await conn.send({"type": "paused"})
@@ -291,6 +450,13 @@ async def handle_message(conn: Connection, msg: dict[str, Any]) -> None:
         snap = await session.ingest(speaker, text, msg.get("t"))
         await conn.send(snap)
         conn.maybe_personalize(snap)
+    elif kind == "restore":
+        await conn.stop_replay()
+        conn.reset_personalization()
+        session.restore(list(msg.get("steps") or []))
+        snap = session.snapshot()
+        snap["type"] = "restored"
+        await conn.send(snap)
     elif kind == "set_weights":
         weights = msg.get("weights") or {}
         session.set_weights({k: float(v) for k, v in weights.items()})

@@ -1,170 +1,185 @@
 {
-  "_comment": "Hand-written coaching playbook. Jev PICKS a move (Choice over the ids); code shows the text. `what`/`not_for` become the Choice option descriptions Jev sees. `phrasings` are candidate lines a rep could say next; a second, speculative Choice per move lets Jev pick the best-fitting line.",
+  "_comment": "Hand-written coaching playbook. Jev PICKS a move (Choice over the ids); code shows the text. `what`/`not_for` become the Choice option descriptions Jev sees. `phrasings` are candidate lines a rep could say next; a second, speculative Choice per move lets Jev pick the best-fitting line. Phrasings rewritten for Playbook Lab (AI + automation agency for B2B sales: Sales OS, squad, tool setup).",
   "moves": [
     {
       "id": "dig_into_the_problem",
-      "title": "Ask a discovery question",
+      "title": "Faça uma pergunta de descoberta",
       "what": "Early in the call, or the prospect's situation, current process, and problems are not yet understood. Ask an open question that gets the prospect describing how things work today.",
       "not_for": "Situations where the pain is already clearly described, or where the prospect just raised a concern that needs a response first.",
       "phrasings": [
-        "Walk me through how that works for your team today, start to finish.",
-        "What's the most painful part of the current process for you?",
-        "What made you take this call now, of all times?"
-      ]
+        "Me conta como funciona hoje a tua prospecção, do primeiro contato até a reunião marcada.",
+        "Qual parte do teu processo comercial mais te toma tempo hoje?",
+        "O que te fez marcar essa conversa agora, e não daqui a três meses?"
+      ],
+      "what_pt": "Início da call, ou a situação do prospect, o processo atual e os problemas ainda não estão claros. Faça uma pergunta aberta para ele descrever como as coisas funcionam hoje."
     },
     {
       "id": "quantify_the_pain",
-      "title": "Quantify the pain",
+      "title": "Quantifique a dor",
       "what": "The prospect described a problem in words, but its cost in hours, money, lost jobs, or missed revenue has not been pinned down. Ask for numbers so the value is concrete.",
       "not_for": "Calls where no problem has been mentioned yet, or where the cost has already been stated.",
       "phrasings": [
-        "Roughly how many hours a week does that eat up across the team?",
-        "If you had to put a dollar figure on that problem per month, what would it be?",
-        "How many jobs a month would you say slip because of that?"
-      ]
+        "Quantas horas por semana você gasta só com prospecção e follow-up manual?",
+        "Quantos leads você acha que esfriam por mês porque o follow-up não aconteceu na hora certa?",
+        "Se você tivesse essas horas de volta, quanto isso valeria em reuniões ou em entrega para cliente?"
+      ],
+      "what_pt": "O prospect descreveu um problema em palavras, mas o custo em horas, leads perdidos, reuniões que não aconteceram ou receita ainda não foi medido. Peça números para o valor ficar concreto."
     },
     {
       "id": "ask_about_budget",
-      "title": "Ask about budget",
+      "title": "Pergunte sobre o orçamento",
       "what": "The prospect has a real need, but nothing is known about their budget or what they pay today, and no concern is currently open. Find out whether money exists for this.",
       "not_for": "Calls where budget has already been discussed, where the prospect just objected to price, or before any problem has been identified.",
       "phrasings": [
-        "What are you spending today on scheduling and dispatch, including the manual work?",
-        "Is there a budget set aside for fixing this, or would we need to build the case together?",
-        "What range would make this an easy yes for you?"
-      ]
+        "Hoje você já investe em alguma ferramenta ou pessoa para prospecção? Quanto mais ou menos?",
+        "Você já reservou um valor para estruturar isso, ou a gente monta o caso juntos?",
+        "Para fazer sentido no teu momento, qual faixa de investimento fica confortável?"
+      ],
+      "what_pt": "O prospect tem uma necessidade real, mas não se sabe nada do orçamento ou do que ele paga hoje, e não há objeção em aberto. Descubra se existe verba para isso."
     },
     {
       "id": "confirm_decision_process",
-      "title": "Confirm the decision process",
+      "title": "Confirme o processo de decisão",
       "what": "The prospect is interested, but it is unclear who makes the purchase decision, who else must approve, or how buying works at their company.",
       "not_for": "Calls where the decision maker and approval process are already known, or where a price or trust concern is open.",
       "phrasings": [
-        "Besides you, who else would need to weigh in on a decision like this?",
-        "How did the last software purchase like this get approved on your side?",
-        "If we agree this is a fit, what happens next internally?"
-      ]
+        "Além de você, mais alguém participa dessa decisão, um sócio por exemplo?",
+        "Como costuma ser a decisão quando você contrata um serviço ou ferramenta nova?",
+        "Se fizer sentido, qual é o próximo passo do teu lado para a gente começar?"
+      ],
+      "what_pt": "O prospect está interessado, mas não está claro quem decide a compra, quem mais precisa aprovar ou como funciona a compra na empresa."
     },
     {
       "id": "state_price_with_context",
-      "title": "State the price, anchored to value",
+      "title": "Apresente o preço ancorado no valor",
       "what": "The prospect asked what the product costs and has not pushed back on price. Give the number plainly and immediately tie it to the cost of the problem they described; do not dodge or delay.",
       "not_for": "Prospects who already heard the price and objected to it (that is a price objection), or calls where no one has asked about price.",
       "phrasings": [
-        "For a team your size it's eleven hundred a month, which is roughly a quarter of what you said the slipped jobs cost you.",
-        "Happy to. It's nine hundred a month on the annual plan. Compare that to the thousand a week in wasted hours we just worked out.",
-        "Straight answer: eight fifty a month for nine techs. Want me to show how that nets out against the double bookings?"
-      ]
+        "Vou ser direto: o Sales OS é R$ 5.000, dá para parcelar em 2x, e se paga com as horas que você deixa de gastar operando.",
+        "São R$ 5.000 de implantação, em até 2x; não é mensalidade de time, é um sistema que fica teu.",
+        "Para o teu momento, o mais enxuto é o Sales OS por R$ 5.000 em 2x; o squad com dev, especialista em vendas e PM é outro patamar de investimento."
+      ],
+      "what_pt": "O prospect perguntou o preço e não reclamou do valor. Diga o número com clareza e ligue-o na hora ao custo do problema que ele descreveu; não enrole."
     },
     {
       "id": "handle_price_objection_roi",
-      "title": "Handle the price objection with ROI",
+      "title": "Trate a objeção de preço com ROI",
       "what": "The prospect pushed back on price, cost, or value for money. Respond by connecting the price to the cost of the problem they described, not by discounting.",
       "not_for": "Calls where no price or cost concern was raised, or where the concern is about trust, timing, or authority.",
       "phrasings": [
-        "Fair. Let's compare it to what the problem costs you now: you mentioned roughly ten hours a week of manual scheduling.",
-        "If it saved even two missed jobs a month, would the math work for you?",
-        "What would it need to save you per month for the price to feel obvious?"
-      ]
+        "Faz sentido olhar pelo custo de hoje: quantas horas por semana você gasta operando o que esse sistema faria por você?",
+        "Comparado a contratar alguém para prospectar, quanto isso te economiza por mês?",
+        "Se esse sistema te devolvesse algumas horas por semana para vender e entregar, o investimento faria sentido?"
+      ],
+      "what_pt": "O prospect reclamou do preço ou do custo-benefício. Responda ligando o preço ao custo do problema que ele descreveu, sem dar desconto."
     },
     {
       "id": "handle_trust_or_risk_concern",
-      "title": "Reassure with proof",
+      "title": "Tranquilize com provas",
       "what": "The prospect doubts the product will work for a company like theirs, doubts the vendor, or worries about implementation risk or disruption. Offer evidence: a similar customer, references, a pilot, or a guarantee.",
       "not_for": "Price or cost concerns, or calls where no doubt has been voiced.",
       "phrasings": [
-        "That's a fair worry. Would it help to talk to a company your size that switched last quarter?",
-        "We can start with a two-week pilot on one crew, so nothing changes for the rest of the team until you've seen it work.",
-        "What would you need to see to feel confident this is low-risk?"
-      ]
+        "Totalmente justo. A gente usa esse mesmo sistema no nosso dia a dia; quer que eu te mostre o meu funcionando?",
+        "Dá para começar pequeno: uma área primeiro, por exemplo a prospecção, e você vê funcionando antes de expandir.",
+        "O que você precisaria ver para ficar tranquilo de que isso funciona para o teu negócio?"
+      ],
+      "what_pt": "O prospect duvida que o produto funcione para uma empresa como a dele, desconfia do fornecedor ou teme o risco da implantação. Ofereça provas: cliente parecido, referências, piloto ou garantia."
     },
     {
       "id": "handle_timing_objection",
-      "title": "Handle the timing objection",
+      "title": "Trate a objeção de timing",
       "what": "The prospect says it is not the right time: too busy, mid-season, mid-project, or 'revisit next quarter'. Find out what actually changes by then and connect waiting to the cost they described, without pressuring.",
       "not_for": "Price, trust, or authority concerns, or prospects who have already named a deadline they want to hit.",
       "phrasings": [
-        "Totally understand. What would be different in September that would make this easier?",
-        "If the busy season is the pain, would it be worth having the fix in place before it starts rather than after?",
-        "Would a lighter pilot on one crew be manageable now, so nothing lands on your plate during the peak?"
-      ]
+        "Entendo. O que muda daqui a alguns meses que tornaria mais fácil começar?",
+        "Justamente por você estar no começo e mudando muito, um sistema flexível ajuda agora; esperar só adia as horas que você já está perdendo.",
+        "Que tal começar com algo leve, só o setup da ferramenta de prospecção, e deixar o resto para depois?"
+      ],
+      "what_pt": "O prospect diz que não é o momento: ocupado, alta temporada, projeto em andamento ou 'vamos ver no próximo trimestre'. Descubra o que muda até lá e ligue a espera ao custo que ele descreveu, sem pressionar."
     },
     {
       "id": "address_competitor_comparison",
-      "title": "Address the competitor comparison",
-      "what": "The prospect mentioned another vendor or their current tool. Ask what they like and dislike about it, then differentiate on what matters to them.",
-      "not_for": "Calls where no other vendor, tool, or alternative was mentioned.",
+      "title": "Responda à comparação com concorrente",
+      "what": "The prospect mentioned another vendor or service they use or are considering INSTEAD of the rep's offer. Ask what they like and dislike about it, then differentiate on what matters to them.",
+      "not_for": "Calls where no alternative to the rep's offer was mentioned; questions about tools, apps, AI models, plans, or prerequisites that are part of the rep's own solution or that the rep recommended (answer those plainly instead).",
       "phrasings": [
-        "What do you like about them, and what's made you keep looking?",
-        "Where is the current tool letting you down most?",
-        "The main difference for teams like yours is real-time re-dispatch; how do you handle same-day changes with them?"
-      ]
+        "O que você já testou até agora, e o que não funcionou?",
+        "Essas ferramentas resolvem a execução; a diferença é a gente juntar ferramenta, IA e estratégia de vendas, para não automatizar algo que não funciona. O que você mais sente falta hoje?",
+        "Se uma ferramenta pronta resolve 70% do que você precisa, ótimo, a gente até recomenda; onde você sente que ela não basta?"
+      ],
+      "what_pt": "O prospect citou outro fornecedor ou a ferramenta atual. Pergunte do que gosta e do que não gosta nela, e se diferencie no que importa para ele."
     },
     {
       "id": "clarify_simply",
-      "title": "Clarify in plain words",
+      "title": "Esclareça em palavras simples",
       "what": "The prospect asked what something means, asked the rep to repeat, or seems lost. Explain plainly in one or two sentences with a concrete example.",
       "not_for": "Calls where the prospect clearly follows the conversation.",
       "phrasings": [
-        "Let me put that more simply: when a job runs late, the schedule updates itself and the customer gets a text.",
-        "Good question, I skipped a step. In plain terms it means...",
-        "Can I show you with an example from your own day?"
-      ]
+        "Deixa eu simplificar: é uma pasta no teu computador onde o Claude guarda tudo do teu negócio e executa tarefas do jeito que você ensinou.",
+        "Na prática: você pede 'gera dez leads e escreve as mensagens', ele faz, e você só aprova.",
+        "Posso te mostrar com um exemplo do teu próprio dia a dia?"
+      ],
+      "what_pt": "O prospect perguntou o que algo significa, pediu para repetir ou parece perdido. Explique de forma simples em uma ou duas frases, com um exemplo concreto."
     },
     {
       "id": "stop_talking_ask_open_question",
-      "title": "Stop talking, ask an open question",
-      "what": "The rep has been talking at length or listing features, and the prospect has gone quiet or is giving short answers. Hand the floor back with an open question.",
-      "not_for": "Moments where the prospect is actively talking or has just asked a direct question.",
+      "title": "Pare de falar, faça uma pergunta aberta",
+      "what": "The rep has been talking at length on their own initiative, pitching or listing features nobody asked for, and the prospect has gone quiet or only says short acknowledgements. Hand the floor back with an open question.",
+      "not_for": "Moments where the prospect is actively talking, has just asked a direct question, or asked the rep to explain, suggest, or show something (the rep is answering that request); short demos the prospect asked to see.",
       "phrasings": [
-        "I've been talking a lot. What's your reaction so far?",
-        "How does that compare to what you were hoping for?",
-        "What questions does that raise for you?"
-      ]
+        "Falei bastante. O que disso faz mais sentido para você?",
+        "Como isso se encaixa no que você imaginava?",
+        "Que dúvidas ficaram até aqui?"
+      ],
+      "what_pt": "O vendedor está falando demais ou listando funcionalidades, e o prospect ficou quieto ou responde curto. Devolva a palavra com uma pergunta aberta."
     },
     {
       "id": "summarize_and_check_understanding",
-      "title": "Summarize and check understanding",
+      "title": "Resuma e confirme o entendimento",
       "what": "The prospect shared several details, priorities, or concerns. Reflect back what you heard in a sentence or two and confirm you got it right.",
       "not_for": "Calls where the prospect has said very little so far.",
       "phrasings": [
-        "So if I've got this right: the dispatcher is drowning, techs get sent to the wrong jobs, and customers are calling to complain. Did I miss anything?",
-        "Let me make sure I understand what matters most to you.",
-        "It sounds like the real issue is same-day changes, not the weekly schedule. Is that fair?"
-      ]
+        "Deixa eu ver se entendi: você prospecta pelo LinkedIn, produz conteúdo, faz tudo sozinho e o follow-up está ficando pra trás. É isso?",
+        "Então o que mais pesa hoje é o volume de prospecção e follow-up que você não consegue acompanhar. Faltou alguma coisa?",
+        "Resumindo: o objetivo é você ganhar escala na prospecção sem contratar agora. Certo?"
+      ],
+      "what_pt": "O prospect compartilhou vários detalhes, prioridades ou preocupações. Resuma o que ouviu em uma ou duas frases e confirme se entendeu certo."
     },
     {
       "id": "create_urgency_honestly",
-      "title": "Create urgency honestly",
+      "title": "Crie urgência de forma honesta",
       "what": "The prospect is interested but has no timeline or says 'someday'. Tie the decision to the real cost of waiting they have already described.",
       "not_for": "Prospects who already have a deadline, or who just raised a price or trust concern.",
       "phrasings": [
-        "Every month this stays as is costs you the ten hours a week you mentioned. What would it take to decide before the busy season?",
-        "Is there a reason to wait, or is it more that it hasn't been a priority?",
-        "If we started this month, you'd be live before summer peak. Does that timing matter to you?"
-      ]
+        "Cada semana fazendo isso na mão são horas que saem da prospecção e da entrega. Quando você gostaria de ter isso rodando?",
+        "Existe algum motivo para esperar, ou só não tinha virado prioridade ainda?",
+        "Se a gente começar agora, em poucas semanas você já está operando com o sistema. Esse prazo faz diferença para você?"
+      ],
+      "what_pt": "O prospect está interessado, mas não tem prazo ou diz 'algum dia'. Ligue a decisão ao custo real de esperar que ele mesmo já descreveu."
     },
     {
       "id": "propose_next_step",
-      "title": "Propose a concrete next step",
+      "title": "Proponha um próximo passo concreto",
       "what": "The conversation is positive, the prospect is engaged, and no concrete next action (demo, trial, follow-up meeting with a date, proposal) has been proposed or agreed yet.",
       "not_for": "Calls where a next step is already agreed, or where an objection is still open.",
       "phrasings": [
-        "How about I set up a 30-minute demo with your dispatcher on Thursday, using your actual job list?",
-        "Can I send a one-page proposal tonight and we review it together on Friday?",
-        "Let's get your ops lead on a call next week; would Tuesday or Wednesday work?"
-      ]
+        "Posso te mandar a proposta do Sales OS ainda hoje e a gente revisa junto em uma call rápida?",
+        "Que tal marcarmos 30 minutos para eu desenhar com você como ficaria o teu sistema?",
+        "Faz sentido eu te mandar a proposta e a gente se falar no começo da semana que vem?"
+      ],
+      "what_pt": "A conversa está positiva, o prospect está engajado e nenhuma ação concreta (demo, teste, reunião com data, proposta) foi proposta ou combinada ainda."
     },
     {
       "id": "ask_for_the_close",
-      "title": "Ask for the close",
+      "title": "Peça o fechamento",
       "what": "Need, budget, decision maker, and timeline are known, concerns have been handled, and the prospect is showing buying signals. Ask directly for the commitment.",
       "not_for": "Calls where key qualification facts are missing or a concern is still open.",
       "phrasings": [
-        "It sounds like this solves the problem. Shall I send the agreement over today so you can start Monday?",
-        "Is there anything stopping us from moving forward?",
-        "Would you like to go ahead with the two-crew plan we discussed?"
-      ]
+        "Pelo que conversamos, o Sales OS resolve o que você precisa agora. Vamos começar?",
+        "Tem alguma coisa que te impede de seguir com a gente?",
+        "Posso te mandar o contrato para a gente iniciar o setup já na próxima semana?"
+      ],
+      "what_pt": "Necessidade, orçamento, decisor e prazo são conhecidos, as objeções foram tratadas e o prospect mostra sinais de compra. Peça o fechamento diretamente."
     }
   ]
 }

@@ -16,7 +16,7 @@ def client(mock_judge_factory, helpers):
     n = helpers["noul"]
     # enough scripted answers for a full replay: first prospect turn carries a buying signal
     script = [{}, {"buying_signal": n(0.95)}] + [{} for _ in range(120)]
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         app.state.judge = mock_judge_factory(script)  # replace whatever lifespan created
         yield c
 
@@ -46,7 +46,7 @@ def _recv(ws, wanted: str, limit: int = 200):
 
 
 def test_websocket_replay_and_weights(client):
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"host": "localhost"}) as ws:
         hello = json.loads(ws.receive_text())
         assert hello["type"] == "hello" and hello["has_api_key"] is True
         assert [c["id"] for c in hello["calls"]][:3] == ["good", "bad", "mixed"]
@@ -76,7 +76,7 @@ def test_websocket_replay_and_weights(client):
 
 
 def test_websocket_live_utterances(client):
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"host": "localhost"}) as ws:
         _recv(ws, "hello")
         ws.send_text(json.dumps({"type": "utterance", "speaker": "rep", "text": "Walk me through your day."}))
         u1 = _recv(ws, "update")

@@ -1,0 +1,10 @@
+.env
+.venv/
+.cache/
+.pytest_cache/
+tools/
+tests/
+eval/
+data/media/
+iniciar.bat
+run.sh

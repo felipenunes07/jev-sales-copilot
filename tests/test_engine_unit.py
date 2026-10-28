@@ -20,6 +20,14 @@ from copilot.engine import (
 )
 from copilot.replay import list_calls, load_call, parse_text_transcript
 
+
+@pytest.fixture(autouse=True)
+def no_backchannel(monkeypatch, request):
+    """Most tests script Jev answers on short placeholder lines ("Sure.", "hmm"); treat every line as a real turn
+    there. Tests marked `backchannel` keep the real rule."""
+    if "backchannel" not in request.keywords:
+        monkeypatch.setattr(C, "BACKCHANNEL_MAX_WORDS", 0)
+
 # ---------------------------------------------------------------------------
 # pure helpers
 # ---------------------------------------------------------------------------
@@ -106,7 +114,7 @@ def test_sensitivity_top_n():
     top = sensitivity(prev, curr, top_n=2)
     assert [d["signal"] for d in top] == ["stage", "a"]
     assert top[0]["delta"] == pytest.approx(0.1)
-    assert top[0]["label"] == "Call stage"
+    assert top[0]["label"] == "Etapa da call"
 
 
 def test_percentile():
@@ -218,7 +226,7 @@ async def test_coaching_confidence_gate(mock_judge_factory, helpers):
     snap = await s.ingest("prospect", "hmm", 3)
     c = snap["coaching"]
     assert c["gated"] is False
-    assert c["title"] == "Ask about budget"
+    assert c["title"] == "Pergunte sobre o orçamento"
     assert c["best_phrasing"] == C.PLAYBOOK_BY_ID["ask_about_budget"]["phrasings"][2]
     assert len(c["phrasings"]) == 3
 
@@ -316,7 +324,7 @@ def test_replay_calls_load_and_are_well_formed():
     assert [c["id"] for c in calls][:3] == ["good", "bad", "mixed"]
     for meta in calls:
         call = load_call(meta["id"])
-        assert 35 <= len(call["utterances"]) <= 80
+        assert 35 <= len(call["utterances"]) <= 200  # hand-written calls ~40, real recordings up to ~150
         ts = [u["t"] for u in call["utterances"]]
         assert ts == sorted(ts)
         assert {u["speaker"] for u in call["utterances"]} == {"rep", "prospect"}
@@ -340,3 +348,89 @@ def test_questions_are_complete_and_literal():
             assert 2 <= len(q["criteria"]) <= 10
     assert set(C.QUESTIONS["next_move"]["criteria"]) == set(C.PLAYBOOK_BY_ID)
     assert "none" in C.QUESTIONS["objection_type"]["criteria"]
+
+
+# ---------------------------------------------------------------------------
+# listening noises, prospect-only scores, coaching streak, qualification checklist
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.backchannel
+async def test_backchannel_skips_jev_and_keeps_the_reading(mock_judge_factory):
+    judge = mock_judge_factory()
+    s = CallSession(judge)
+    first = await s.ingest("prospect", "Our follow-ups keep falling through every week.", 0)
+    snap = await s.ingest("prospect", "Legal.", 4)
+    assert judge.calls == 1  # no Jev call for a listening noise
+    assert snap["backchannel"] is True
+    assert snap["stage"] == first["stage"] and snap["coaching"] == first["coaching"]
+    assert snap["sensitivity"] == []
+    snap = await s.ingest("prospect", "Isso funciona?", 6)  # a short question is a real turn
+    assert judge.calls == 2 and snap["backchannel"] is False
+
+
+async def test_engagement_only_moves_on_prospect_turns(mock_judge_factory, helpers):
+    score = helpers["score"]
+    judge = mock_judge_factory([{"engagement": score(2.0)}, {"engagement": score(0.0)}])
+    s = CallSession(judge)
+    await s.ingest("prospect", "Tell me more about how it works for us.", 0)
+    await s.ingest("rep", "It runs every follow-up for you automatically.", 5)
+    assert s.steps[-1].features["engagement"] == 1.0  # the rep's turn keeps the prospect's last reading
+
+
+async def test_coaching_streak_counts_repeats(mock_judge_factory):
+    s = CallSession(mock_judge_factory())
+    for i in range(3):
+        snap = await s.ingest("rep", f"Explaining part {i} of the offer.", 5 * i)
+    assert snap["coaching"]["streak"] == 3
+
+
+async def test_rep_streak_seconds(mock_judge_factory, monkeypatch):
+    monkeypatch.setattr(C, "BACKCHANNEL_MAX_WORDS", 3)
+    s = CallSession(mock_judge_factory())
+    await s.ingest("prospect", "What would you suggest for me?", 0)
+    await s.ingest("rep", "Let me show you the system.", 10)
+    await s.ingest("prospect", "Legal.", 40)
+    snap = await s.ingest("rep", "And this part handles the follow-ups for you.", 70)
+    assert snap["talk"]["rep_streak_s"] == 60.0  # "Legal." does not give the floor back
+
+
+async def test_qualification_nudge_after_discovery(mock_judge_factory, helpers):
+    choice, noul = helpers["choice"], helpers["noul"]
+    judge = mock_judge_factory([{"pain_identified": noul(0.9)}, {"stage": choice("pricing", 0.9, list(C.STAGES))}])
+    s = CallSession(judge)
+    snap = await s.ingest("prospect", "Prospecting by hand eats my whole week.", 0)
+    assert snap["qualification"]["nudge"] is None  # still in discovery
+    snap = await s.ingest("rep", "The investment is five thousand, in two payments.", 5)
+    q = snap["qualification"]
+    assert [i["done"] for i in q["items"]][:2] == [True, False]
+    assert q["nudge"]["fact"] == "decision_maker_identified"
+
+
+async def test_stop_talking_waits_for_a_real_monologue(mock_judge_factory, helpers):
+    ids = [m["id"] for m in C.PLAYBOOK]
+    stop = {"next_move": helpers["choice"]("stop_talking_ask_open_question", 0.9, ids)}
+    s = CallSession(mock_judge_factory([{}, stop, stop]))
+    await s.ingest("prospect", "What would you suggest for someone like me?", 0)
+    snap = await s.ingest("rep", "Let me show you how the system works for you.", 10)
+    assert snap["coaching"]["move_id"] != "stop_talking_ask_open_question"  # 10 s answering a question
+    snap = await s.ingest("rep", "And it also handles every follow-up automatically.", 75)
+    assert snap["coaching"]["move_id"] == "stop_talking_ask_open_question"  # 75 s holding the floor
+
+
+async def test_restore_rebuilds_the_call_without_jev(mock_judge_factory, helpers):
+    noul = helpers["noul"]
+    judge = mock_judge_factory([{"pain_identified": noul(0.9)}, {}, {}])
+    s = CallSession(judge)
+    for spk, txt, t in (("prospect", "Following up by hand eats my whole week.", 0), ("rep", "How many leads go cold?", 5), ("prospect", "Maybe ten a month.", 9)):
+        await s.ingest(spk, txt, t)
+    history = [{"speaker": st.utterance.speaker, "text": st.utterance.text, "t": st.utterance.t, "answers": st.answers} for st in s.steps]
+    before = s.snapshot()
+    fresh_judge = mock_judge_factory()
+    r = CallSession(fresh_judge)
+    r.restore(history)
+    after = r.snapshot()
+    assert fresh_judge.calls == 0
+    assert after["probability"] == before["probability"]
+    assert after["facts"] == before["facts"] and after["stage"] == before["stage"]
+    assert [x["probability"] for x in after["timeline"]] == [x["probability"] for x in before["timeline"]]

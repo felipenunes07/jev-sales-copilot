@@ -100,14 +100,14 @@ def client_with_llm(mock_judge_factory, helpers, monkeypatch):
     # utterance 0: default move (dig_into_the_problem, skipped); utterance 1: quantify_the_pain -> triggers a rewrite
     script = [{}, {"next_move": ch("quantify_the_pain", 0.8, moves)}] + [{"next_move": ch("quantify_the_pain", 0.8, moves)} for _ in range(50)]
     monkeypatch.setattr(C, "PERSONALIZE_VERIFY_WITH_JEV", False)
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         app.state.judge = mock_judge_factory(script)
         app.state.personalizer = MockPersonalizer()
         yield c
 
 
 def test_phrasing_message_after_move_change(client_with_llm):
-    with client_with_llm.websocket_connect("/ws") as ws:
+    with client_with_llm.websocket_connect("/ws", headers={"host": "localhost"}) as ws:
         hello = _recv(ws, "hello")
         assert hello["llm"] == C.LLM_MODEL
         ws.send_text(json.dumps({"type": "utterance", "speaker": "rep", "text": "Walk me through your day."}))
@@ -128,10 +128,10 @@ def test_phrasing_message_after_move_change(client_with_llm):
 
 
 def test_no_llm_when_key_missing(mock_judge_factory):
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         app.state.judge = mock_judge_factory([{} for _ in range(10)])
         app.state.personalizer = None
-        with c.websocket_connect("/ws") as ws:
+        with c.websocket_connect("/ws", headers={"host": "localhost"}) as ws:
             hello = _recv(ws, "hello")
             assert hello["llm"] is None
             ws.send_text(json.dumps({"type": "utterance", "speaker": "rep", "text": "Hi there, thanks for the time."}))

@@ -1,6 +1,6 @@
 {
   "id": "cloudtalk",
-  "title": "CloudTalk × Madrid SDR team — real recorded qualification call",
+  "title": "CloudTalk × time de SDR de Madri — call real de qualificação gravada",
   "description": "A real recorded discovery + BANT call published by CloudTalk on YouTube: Nick (account specialist, CloudTalk) qualifies Bradford (SDR manager at a Madrid startup dialing from mobile phones, logging into HubSpot by hand). Pain, geography, seat count, decision process, CRM, budget and a booked follow-up with an account executive all surface within 9 minutes. Transcribed locally with faster-whisper (small.en), speakers labeled by hand; timestamps align to the YouTube video so the copilot can run in sync with playback.",
   "expected": "qualifies and books a next step",
   "source": "https://www.youtube.com/watch?v=uovWCGCl2-s",

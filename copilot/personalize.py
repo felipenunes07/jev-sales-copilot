@@ -74,6 +74,7 @@ SYSTEM_PROMPT = (
     "Write exactly ONE sentence the rep can say next, in the rep's own voice, natural and spoken. "
     "It must carry out the coaching move you are given. Use only details that appear in the transcript: "
     "never invent numbers, prices, names, dates, features, or promises. Prefer a question over a statement. "
+    "Write in the language of the transcript (Brazilian Portuguese if the call is in Portuguese). "
     "Output the sentence only: no quotes, no preamble, no explanation."
 )
 
@@ -195,6 +196,70 @@ class AnthropicPersonalizer:
             rejected_reason=None if line else ("truncated" if truncated else "unusable output"),
             extra={"raw": text[:400], "stop_reason": data.get("stop_reason")},
         )
+
+
+class OpenRouterPersonalizer:
+    """Same interface as AnthropicPersonalizer, over OpenRouter's OpenAI-compatible chat completions."""
+
+    def __init__(self, api_key: str, model: str = C.OPENROUTER_LLM_MODEL, timeout: float = C.LLM_TIMEOUT_S):
+        self.model = model
+        self._client = httpx.AsyncClient(
+            base_url=C.OPENROUTER_BASE_URL,
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {api_key}", "content-type": "application/json"},
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def __call__(self, move: Mapping[str, Any], transcript: list[Mapping[str, Any]], facts: list[str], objection: Mapping[str, Any] | None) -> PhrasingResult:
+        body = {
+            "model": self.model,
+            "max_tokens": C.LLM_MAX_OUTPUT_TOKENS,
+            "temperature": 0.4,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_prompt(move, transcript, facts, objection)},
+            ],
+        }
+        t0 = time.perf_counter()
+        try:
+            resp = await self._client.post("/api/v1/chat/completions", json=body)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001 - never let the LLM path break the call loop
+            latency = (time.perf_counter() - t0) * 1000
+            log.warning("llm request failed after %.0f ms: %s", latency, type(exc).__name__)
+            return PhrasingResult(text=None, model=self.model, latency_ms=latency, error=f"{type(exc).__name__}: {exc}")
+        latency = (time.perf_counter() - t0) * 1000
+        choice = (data.get("choices") or [{}])[0]
+        text = (choice.get("message") or {}).get("content") or ""
+        usage = data.get("usage", {})
+        in_tok, out_tok = int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
+        truncated = choice.get("finish_reason") == "length"
+        line = None if truncated else clean_line(text, max_words_for(move["id"]))
+        cost = float(usage.get("cost") or 0.0)
+        log.info("llm model=%s latency=%.0fms in=%d out=%d cost=$%.6f ok=%s", data.get("model", self.model), latency, in_tok, out_tok, cost, line is not None)
+        return PhrasingResult(
+            text=line,
+            model=self.model,
+            latency_ms=latency,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_usd=cost,
+            rejected_reason=None if line else ("truncated" if truncated else "unusable output"),
+            extra={"raw": text[:400], "stop_reason": choice.get("finish_reason")},
+        )
+
+
+def make_personalizer() -> "AnthropicPersonalizer | OpenRouterPersonalizer | None":
+    """ANTHROPIC_API_KEY → Anthropic directly; else OPENROUTER_API_KEY → OpenRouter; else off."""
+    if resolve_llm_key():
+        return AnthropicPersonalizer()
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if key:
+        return OpenRouterPersonalizer(key, model=os.environ.get("OPENROUTER_LLM_MODEL", C.OPENROUTER_LLM_MODEL))
+    return None
 
 
 # ---------------------------------------------------------------------------

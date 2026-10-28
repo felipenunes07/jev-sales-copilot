@@ -48,6 +48,11 @@ def pace_wpm(utterances: list["Utterance"], speaker: str, now_t: float, window_s
     return words * 60.0 / elapsed if elapsed > 0 else 0.0
 
 
+def is_backchannel(text: str) -> bool:
+    """'Legal.', 'Uhum', 'Perfeito' — a listening noise, not a turn: no Jev call and the number does not move."""
+    return word_count(text) <= C.BACKCHANNEL_MAX_WORDS and "?" not in text
+
+
 def ema(previous: float, instant: float, alpha: float = C.EMA_ALPHA) -> float:
     return alpha * instant + (1.0 - alpha) * previous
 
@@ -87,7 +92,7 @@ def sensitivity(prev: dict[str, float], curr: dict[str, float], top_n: int = C.S
     for name in set(prev) | set(curr):
         d = curr.get(name, 0.0) - prev.get(name, 0.0)
         if abs(d) >= 0.0005:
-            label = "Call stage" if name == "stage" else C.SIGNAL_WEIGHTS.get(name, {}).get("label", name)
+            label = "Etapa da call" if name == "stage" else C.SIGNAL_WEIGHTS.get(name, {}).get("label", name)
             deltas.append({"signal": name, "label": label, "delta": round(d, 4)})
     deltas.sort(key=lambda d: (-abs(d["delta"]), -d["delta"], d["signal"]))  # deterministic on ties (set order is randomized)
     return deltas[:top_n]
@@ -180,10 +185,11 @@ class CallSession:
         self.requests = 0
         self.errors = 0
         self.last_model: str | None = None
+        self.prospect_scores: dict[str, float] = {}  # engagement/urgency as last judged on a real prospect turn
 
     # -- state for Jev --------------------------------------------------------
     def build_state(self, latest: Utterance) -> dict[str, Any]:
-        window = self.utterances[-C.RECENT_WINDOW :]
+        window = self.utterances[-(C.RECENT_WINDOW_ECONOMY if C.ECONOMY else C.RECENT_WINDOW) :]
         ratio, _, _ = talk_ratio(self.utterances)
         return {
             "call_facts": {
@@ -205,12 +211,48 @@ class CallSession:
             t = (self.utterances[-1].t + max(2.0, word_count(text) / 2.5)) if self.utterances else 0.0
         u = Utterance(speaker=speaker, text=text.strip(), t=float(t), index=len(self.utterances))
         self.utterances.append(u)
-        state = self.build_state(u)
-        result = await self.judge(state, self.questions)
-        self._account(result)
-        step = self._apply(u, result.answers, result_meta(result))
+        if self.steps and is_backchannel(u.text):
+            step = self._apply_backchannel(u)
+        else:
+            state = self.build_state(u)
+            result = await self.judge(state, self.questions_for(u))
+            self._account(result)
+            step = self._apply(u, result.answers, result_meta(result))
         self.steps.append(step)
         return self.snapshot(step)
+
+    def questions_for(self, u: Utterance) -> dict[str, Any]:
+        """All questions, or in economy mode only those whose answer can still change the output."""
+        if not C.ECONOMY:
+            return self.questions
+        locked = {n for n in self.facts if self.weights.get(n, {}).get("kind") == "fact"}
+        out = {}
+        for name, q in self.questions.items():
+            if name.startswith("phrasing::") or name in locked:
+                continue
+            if u.speaker != "prospect" and (name in C.PROSPECT_ONLY_SIGNALS or name == "objection_type"):
+                continue
+            if u.speaker != "rep" and name in C.REP_ONLY_SIGNALS:
+                continue
+            out[name] = q
+        return out
+
+    def restore(self, steps: list[dict[str, Any]]) -> None:
+        """Rebuild a call from what the browser kept (utterance + Jev's raw answers), without asking Jev again.
+
+        Hosted functions close long-lived connections; the browser reconnects and sends the call back so the reading
+        continues where it was instead of starting from zero.
+        """
+        self.reset()
+        for i, raw in enumerate(steps):
+            u = Utterance(speaker="prospect" if str(raw.get("speaker", "")).startswith("p") else "rep",
+                          text=str(raw.get("text", "")).strip(), t=float(raw.get("t") or 0.0), index=i)
+            self.utterances.append(u)
+            if self.steps and is_backchannel(u.text):
+                step = self._apply_backchannel(u)
+            else:
+                step = self._apply(u, dict(raw.get("answers") or {}), {"restored": True})
+            self.steps.append(step)
 
     def _account(self, result: JudgeResult) -> None:
         self.requests += 1
@@ -240,7 +282,14 @@ class CallSession:
                 f[name] = x
             elif kind == "score":
                 a = answers.get(name)
-                f[name] = normalize_score(a) if a and a.get("type") == "score" else 0.5
+                x = normalize_score(a) if a and a.get("type") == "score" else 0.5
+                # how engaged/urgent the prospect is can only change when the prospect speaks
+                if name in C.PROSPECT_SCORES:
+                    if u.speaker == "prospect":
+                        self.prospect_scores[name] = x
+                    else:
+                        x = self.prospect_scores.get(name, x)
+                f[name] = x
         f["objection_open"] = 1.0 if objection_open else 0.0
         f["rep_talking_too_much"] = self._rep_talking_too_much(u)
         return f
@@ -300,8 +349,13 @@ class CallSession:
         nm = answers.get("next_move")
         if not nm or nm.get("type") != "choice":
             return {"gated": True, "reason": "no answer"}
-        move = C.PLAYBOOK_BY_ID.get(nm["choice"])
-        gated = nm["confidence"] < C.NEXT_MOVE_MIN_CONFIDENCE or move is None
+        choice, confidence = nm["choice"], nm["confidence"]
+        # "stop talking" only once the rep has really held the floor; before that, the next most likely move
+        if choice == "stop_talking_ask_open_question" and self._rep_streak_s(u) < C.STOP_TALKING_MIN_STREAK_S:
+            ranked = sorted(nm["probabilities"].items(), key=lambda kv: -kv[1])
+            choice, confidence = next(((k, v) for k, v in ranked if k != choice), (choice, 0.0))
+        move = C.PLAYBOOK_BY_ID.get(choice)
+        gated = confidence < C.NEXT_MOVE_MIN_CONFIDENCE or move is None
         best = None
         if move:
             ph = answers.get(f"phrasing::{move['id']}")
@@ -310,14 +364,24 @@ class CallSession:
                 best = move["phrasings"][idx] if idx < len(move["phrasings"]) else None
         return {
             "gated": gated,
-            "move_id": move["id"] if move else nm["choice"],
-            "title": move["title"] if move else nm["choice"],
-            "what": move["what"] if move else "",
+            "move_id": move["id"] if move else choice,
+            "title": move["title"] if move else choice,
+            "what": move.get("what_pt", move["what"]) if move else "",
             "phrasings": move["phrasings"] if move else [],
             "best_phrasing": best,
-            "confidence": round(nm["confidence"], 3),
+            "confidence": round(confidence, 3),
             "probabilities": {k: round(v, 3) for k, v in sorted(nm["probabilities"].items(), key=lambda kv: -kv[1])[:4]},
+            "streak": self._move_streak(move["id"] if move else choice),
         }
+
+    def _move_streak(self, move_id: str) -> int:
+        """How many utterances in a row (including this one) the same move has been suggested."""
+        n = 1
+        for step in reversed(self.steps):
+            if step.coaching.get("move_id") != move_id:
+                break
+            n += 1
+        return n
 
     def _apply(self, u: Utterance, answers: dict[str, dict[str, Any]], jev_meta: dict[str, Any]) -> Step:
         # stage
@@ -342,6 +406,7 @@ class CallSession:
             "pace_wpm_rep": round(pace_wpm(self.utterances, "rep", u.t)),
             "pace_wpm_prospect": round(pace_wpm(self.utterances, "prospect", u.t)),
             "rep_monologue": u.speaker == "rep" and word_count(u.text) > C.REP_MONOLOGUE_WORDS,
+            "rep_streak_s": self._rep_streak_s(u),
         }
         return Step(
             utterance=u,
@@ -359,6 +424,45 @@ class CallSession:
             coaching=self._coaching(u, answers),
             sensitivity=sensitivity(prev_contrib, contributions),
         )
+
+    def _rep_streak_s(self, u: Utterance) -> float:
+        """Seconds the rep has held the floor: since the last real (non-backchannel) prospect turn."""
+        if u.speaker != "rep":
+            return 0.0
+        start = u.t
+        for prev in reversed(self.utterances):
+            if prev.speaker == "prospect" and not is_backchannel(prev.text):
+                break
+            start = prev.t
+        return round(u.t - start, 1)
+
+    def _apply_backchannel(self, u: Utterance) -> Step:
+        """A listening noise keeps the previous reading: same stage, signals and coaching, no Jev call."""
+        prev = self.steps[-1]
+        self.stage_history.append(prev.stage)
+        self._update_objection(u, {})  # only lets an old objection expire
+        inst = prev.instant
+        self.probability = ema(self.probability, inst)  # same rule recompute() applies to the stored features
+        talk = dict(prev.talk)
+        ratio, rep_w, pro_w = talk_ratio(self.utterances)
+        talk.update({"ratio_rep": round(ratio, 3), "rep_words": rep_w, "prospect_words": pro_w, "rep_monologue": False, "rep_streak_s": self._rep_streak_s(u)})
+        return Step(
+            utterance=u, answers=prev.answers, features=dict(prev.features), stage=prev.stage,
+            stage_confidence=prev.stage_confidence, instant=inst, probability=self.probability,
+            contributions=dict(prev.contributions), objection=copy.copy(self.objection), facts=dict(self.facts),
+            jev={"backchannel": True}, talk=talk, coaching=dict(prev.coaching), sensitivity=[],
+        )
+
+    def qualification(self, step: Step | None) -> dict[str, Any]:
+        """Checklist of what the rep has established, plus a nudge for the first gap once it is time to ask."""
+        items = [{"fact": q["fact"], "label": q["label"], "done": q["fact"] in self.facts} for q in C.QUALIFICATION]
+        nudge = None
+        late = step is not None and (step.stage in C.QUALIFICATION_LATE_STAGES or len(self.utterances) >= C.QUALIFICATION_AFTER_UTTERANCES)
+        if late:
+            missing = next((q for q in C.QUALIFICATION if q["fact"] not in self.facts and q["fact"] != "next_step_agreed"), None)
+            if missing:
+                nudge = {"fact": missing["fact"], "label": missing["label"], "ask": missing["ask"]}
+        return {"items": items, "nudge": nudge}
 
     # -- weights can change without re-asking Jev -----------------------------
     def set_weights(self, updates: dict[str, float]) -> None:
@@ -454,6 +558,10 @@ class CallSession:
                 "stage": {"choice": step.stage, "confidence": round(step.stage_confidence, 3)},
                 "signals": signals,
                 "coaching": step.coaching,
+                "qualification": self.qualification(step),
+                "backchannel": bool(step.jev.get("backchannel")),
+                # raw answers go back to the browser so it can rebuild the call after a reconnect (see restore)
+                "answers": None if step.jev.get("backchannel") else step.answers,
                 "talk": step.talk,
                 "sensitivity": step.sensitivity,
                 "contributions": {k: round(v, 4) for k, v in step.contributions.items()},

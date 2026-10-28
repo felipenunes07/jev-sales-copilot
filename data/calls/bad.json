@@ -1,6 +1,6 @@
 {
   "id": "bad",
-  "title": "Bluewater Plumbing — feature dump, unhandled price objection",
+  "title": "Bluewater Plumbing — despejo de funcionalidades, objeção de preço não tratada",
   "description": "Rep (Maya, Relay) pitches Tom, owner of a 9-tech plumbing company, almost immediately. Tom raises a price objection that the rep talks past, mentions a competitor (DispatchPro) that is never addressed, gets confused by jargon, and gradually disengages. Ends with 'just send me some info'.",
   "expected": "lost",
   "utterances": [

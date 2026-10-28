@@ -15,16 +15,53 @@ from typing import Any
 # ---------------------------------------------------------------------------
 MODEL = "jev-1.13.0"  # pinned; `jev-latest` moves on release and would shift thresholds
 PRICE_PER_M_INPUT_TOKENS_USD = 0.042  # output tokens are free
-API_KEY_ENV_VARS = ("TYPESAFE_API_KEY", "JEV_API_KEY")
+API_KEY_ENV_VARS = ("TYPESAFE_API_KEY", "JEV_API_KEY", "JEVMODEL_API_KEY", "BEATAPI_API_KEY", "OPENROUTER_API_KEY")
+# Hosted SystemOne-compatible providers (`sk-…` keys), see jev_client.make_judge
+HOSTED_REQUEST_TIMEOUT_S = 30.0
+HOSTED_MAX_CONCURRENCY = 6
+# OpenRouter: real Jev (provider TypeSafe) on its decisions endpoint, same request shape as SystemOne
+OPENROUTER_BASE_URL = "https://openrouter.ai"
+OPENROUTER_DECISIONS_PATH = "/api/alpha/decisions"
+OPENROUTER_JEV_MODEL = "typesafe/jev-1.13"
+OPENROUTER_STT_MODEL = "openai/gpt-audio-mini"  # video call transcription: ~$0.0008/min of speech, PT-BR verified
+OPENROUTER_LLM_MODEL = "anthropic/claude-haiku-5.5"  # tailored phrasing when no ANTHROPIC_API_KEY; cheaper models (Llama 3.1 8B) invent facts and get dropped
+# BeatAPI: one request per utterance; free accounts only get the `-free` models
+BEATAPI_BASE_URL = "https://api.beatapi.io"
+BEATAPI_MODEL = "jev-1.13-free"
+# jevmodel.org: max 8 questions per request
+JEVMODEL_BASE_URL = "https://jevmodel.org"
+JEVMODEL_MAX_QUESTIONS_PER_REQUEST = 8
+JEVMODEL_MAX_CRITERIA_CHARS = 1950  # API cap is 2,000 serialized chars per question
 REQUEST_TIMEOUT_S = 8.0
 
 # ---------------------------------------------------------------------------
 # State shaping (kept in code: rolling window, arithmetic)
 # ---------------------------------------------------------------------------
 RECENT_WINDOW = 12  # utterances of transcript sent to Jev
+# Economy mode (COPILOT_ECONOMY=1): fewer input tokens per utterance for free-tier keys. Skips the 15 phrasing
+# Choices, questions masked for this speaker anyway, and facts already locked in; shorter transcript window.
+ECONOMY = __import__("os").environ.get("COPILOT_ECONOMY", "") == "1"
+RECENT_WINDOW_ECONOMY = 6
+# Hosted providers: identical requests are answered from this on-disk cache (replaying a call twice costs nothing)
+JEV_CACHE_DIR = __import__("os").environ.get("COPILOT_CACHE_DIR") or ("/tmp/jev-cache" if __import__("os").environ.get("VERCEL") else ".cache/jev")  # only /tmp is writable on Vercel
 PACE_WINDOW_S = 60.0  # words-per-minute window for pace
 TALK_RATIO_MIN_UTTERANCES = 6  # talk-ratio penalty only after this many utterances
 REP_MONOLOGUE_WORDS = 70  # a single rep utterance longer than this is flagged in code
+BACKCHANNEL_MAX_WORDS = 3  # "legal", "uhum", "perfeito": no Jev call, the number does not move
+STOP_TALKING_MIN_STREAK_S = 60.0  # below this, "stop talking" yields to the next most likely move
+REP_STREAK_WARN_S = 90.0  # the rep has held the floor this long without a real prospect turn -> UI warning
+
+# Qualification checklist shown to the rep. Once the call is past discovery (or long enough), the first missing item
+# becomes a nudge with a ready question, so gaps are flagged before the price, not after.
+QUALIFICATION: list[dict[str, str]] = [
+    {"fact": "pain_identified", "label": "Dor", "ask": "Qual parte do teu processo comercial mais te toma tempo hoje?"},
+    {"fact": "decision_maker_identified", "label": "Decisor", "ask": "Além de você, mais alguém participa dessa decisão, um sócio por exemplo?"},
+    {"fact": "timeline_known", "label": "Prazo", "ask": "Para quando você gostaria de ter isso rodando?"},
+    {"fact": "budget_discussed", "label": "Orçamento", "ask": "Hoje você já investe em alguma ferramenta ou pessoa para prospecção? Quanto mais ou menos?"},
+    {"fact": "next_step_agreed", "label": "Próximo passo", "ask": "Que tal já deixarmos marcada a próxima conversa, com dia e hora?"},
+]
+QUALIFICATION_LATE_STAGES = ("pitch_demo", "pricing", "objection_handling", "closing", "next_steps")
+QUALIFICATION_AFTER_UTTERANCES = 20
 
 # ---------------------------------------------------------------------------
 # Playbook (hand-written text; Jev only picks)
@@ -96,7 +133,7 @@ OBJECTION_TYPES: dict[str, dict[str, str]] = {
     "authority": {"what": "The prospect cannot decide alone; someone else (boss, owner, committee, IT) must approve."},
     "need": {"what": "The prospect doubts they have the problem, or thinks the current way is fine."},
     "trust": {"what": "Doubts about the vendor, the product working for them, implementation risk, or disruption."},
-    "competitor": {"what": "Prefers, uses, or is evaluating another vendor or tool instead."},
+    "competitor": {"what": "Prefers, uses, or is evaluating another vendor instead of buying from the rep. Tools, apps, or AI models that the rep's own solution runs on, includes, or recommends are not competitors."},
     "none": {"what": "The prospect has not voiced any concern or pushback about buying."},
 }
 
@@ -134,7 +171,7 @@ QUESTIONS: dict[str, dict[str, Any]] = {
     "prospect_objecting": _noul(
         "Does `latest_utterance.text`, " + _PROSPECT + ", raise a concern, hesitation, or pushback about buying the product?",
         true="Says it is too expensive, not the right time, needs someone else's approval, doubts they need it or that it will work, prefers a competitor, or asks a skeptical 'why would we...' question.",
-        false="Neutral questions about how something works, sharing information about their situation, agreement, or small talk.",
+        false="Neutral or clarifying questions about how something works, what it includes, its prerequisites, plans, or limits (even if detailed); sharing information about their situation; agreement; or small talk.",
     ),
     "prospect_accepts": _noul(
         "Does `latest_utterance.text`, " + _PROSPECT + ", accept, agree with, or acknowledge as reasonable what the rep just said?",
@@ -157,13 +194,13 @@ QUESTIONS: dict[str, dict[str, Any]] = {
     # ---- rep-turn Nouls (masked in code when the speaker is the prospect) ----
     "rep_discovery_question": _noul(
         "Is `latest_utterance.text`, spoken by the rep (`latest_utterance.speaker` is rep), an open-ended question inviting the prospect to describe their situation, current process, problems, goals, or how they make decisions?",
-        true="'Walk me through how scheduling works today', 'what's the most painful part of that?', 'what happens when a job runs late?', 'who else is involved in a decision like this?'",
+        true="'Walk me through how your prospecting works today', 'what's the most painful part of that?', 'what happens when a lead goes cold?', 'who else is involved in a decision like this?'",
         false="A yes/no question, a statement, describing product features, quoting a price, or proposing a meeting.",
     ),
     "rep_pitching": _noul(
-        "Is `latest_utterance.text`, spoken by the rep (`latest_utterance.speaker` is rep), describing product features, capabilities, or benefits without asking the prospect a question?",
-        true="Lists what the product does, how it works, its integrations, or benefits, and ends without a question to the prospect.",
-        false="Asks the prospect a question, talks about the prospect's situation, quotes a price, or proposes a next step.",
+        "Is `latest_utterance.text`, spoken by the rep (`latest_utterance.speaker` is rep), volunteering product features, capabilities, or benefits that the prospect did not ask about, without asking the prospect a question?",
+        true="Lists what the product does, how it works, its integrations, or benefits on the rep's own initiative, and ends without a question to the prospect.",
+        false="Answers a question or request the prospect made in `recent_transcript`, asks the prospect a question, talks about the prospect's situation, quotes a price, or proposes a next step.",
     ),
     "next_step_proposed": _noul(
         "Does `latest_utterance.text` propose a concrete next step such as a demo, a trial or pilot, a follow-up meeting with a day or time, sending a proposal, or bringing in another stakeholder?",
@@ -173,13 +210,13 @@ QUESTIONS: dict[str, dict[str, Any]] = {
     # ---- transcript-window Nouls (durable facts, persisted in code once confident) ----
     "pain_identified": _noul(
         "In `recent_transcript`, has the prospect described a specific problem, frustration, inefficiency, or cost they are currently experiencing in their business?",
-        true="Prospect mentions things like double-booked technicians, hours of manual scheduling, customers complaining, missed jobs, wasted drive time, or paying for a tool that does not work.",
+        true="Prospect mentions things like hours of manual work, leads or follow-ups falling through, no time to prospect, losing customers or deals, a process that does not scale, or paying for a tool that does not work.",
         false="Only the rep talks about problems in general, or the prospect says things are fine.",
     ),
     "budget_discussed": _noul(
-        "In `recent_transcript`, has the prospect said anything about their budget, what they currently pay, an acceptable price range, or whether money is available for this?",
-        true="Prospect states a budget, a range, what the current tool or manual work costs them, or that funds are or are not approved.",
-        false="Only the rep quoted prices, or budget has not come up.",
+        "In `recent_transcript`, has money been discussed: the price or investment of the rep's offer, or the prospect's budget, what they pay today, or whether funds are available?",
+        true="The rep states the price or investment of the offer, or the prospect states a budget, a range, what they currently pay, or that funds are or are not approved.",
+        false="Nobody has mentioned the price of the offer or the prospect's budget.",
     ),
     "decision_maker_identified": _noul(
         "In `recent_transcript`, has the prospect stated who makes the purchase decision (themselves, a named person, or a role) or how the decision gets approved?",
@@ -192,9 +229,9 @@ QUESTIONS: dict[str, dict[str, Any]] = {
         false="No timing for a decision or rollout has been mentioned by the prospect.",
     ),
     "competitor_mentioned": _noul(
-        "Does `latest_utterance.text` mention another vendor, another software product, or an alternative the prospect uses or is evaluating instead of the rep's product?",
-        true="Names a competing product or company, 'we're also looking at two other vendors', 'we currently use a tool from another company'.",
-        false="Mentions only the rep's product, spreadsheets, or manual processes without naming an alternative product or vendor.",
+        "Does `latest_utterance.text` mention another vendor or an alternative that the prospect uses or is evaluating INSTEAD of buying from the rep?",
+        true="Names a competing company or service the prospect is considering instead, 'we're also looking at two other agencies', 'we already pay another vendor for this'.",
+        false="Mentions only the rep's offer, manual processes, or tools, apps, and AI models that the rep's own solution uses, includes, or recommends (those are part of the offer, not alternatives to it).",
     ),
     # ---- Scores (levels are concrete situations, one dimension each) ----
     "rapport": {
@@ -279,6 +316,7 @@ PROSPECT_ONLY_SIGNALS = (
     "prospect_asked_price",
 )
 REP_ONLY_SIGNALS = ("rep_discovery_question", "rep_pitching")
+PROSPECT_SCORES = ("engagement", "urgency")  # judged on prospect turns only; rep turns carry the last value
 
 # ---------------------------------------------------------------------------
 # Composite closing probability (all arithmetic in code)
@@ -292,28 +330,28 @@ REP_ONLY_SIGNALS = ("rep_discovery_question", "rep_pitching")
 # ---------------------------------------------------------------------------
 SIGNAL_WEIGHTS: dict[str, dict[str, Any]] = {
     # positive, transient (prospect turns)
-    "commitment": {"kind": "noul", "weight": 0.15, "label": "Prospect committed"},
-    "buying_signal": {"kind": "noul", "weight": 0.10, "label": "Buying signal"},
-    "prospect_accepts": {"kind": "noul", "weight": 0.03, "label": "Prospect agrees with rep"},
+    "commitment": {"kind": "noul", "weight": 0.15, "label": "Prospect se comprometeu"},
+    "buying_signal": {"kind": "noul", "weight": 0.10, "label": "Sinal de compra"},
+    "prospect_accepts": {"kind": "noul", "weight": 0.03, "label": "Prospect concorda com o vendedor"},
     # positive, durable facts
-    "next_step_agreed": {"kind": "fact", "weight": 0.09, "label": "Next step agreed"},
-    "pain_identified": {"kind": "fact", "weight": 0.05, "label": "Pain identified"},
-    "budget_discussed": {"kind": "fact", "weight": 0.04, "label": "Budget discussed"},
-    "decision_maker_identified": {"kind": "fact", "weight": 0.04, "label": "Decision maker identified"},
-    "timeline_known": {"kind": "fact", "weight": 0.04, "label": "Timeline known"},
+    "next_step_agreed": {"kind": "fact", "weight": 0.09, "label": "Próximo passo combinado"},
+    "pain_identified": {"kind": "fact", "weight": 0.05, "label": "Dor identificada"},
+    "budget_discussed": {"kind": "fact", "weight": 0.04, "label": "Preço/orçamento discutido"},
+    "decision_maker_identified": {"kind": "fact", "weight": 0.04, "label": "Decisor identificado"},
+    "timeline_known": {"kind": "fact", "weight": 0.04, "label": "Prazo conhecido"},
     # relationship scores (centered: middle level is neutral)
-    "engagement": {"kind": "score", "weight": 0.08, "label": "Buyer engagement"},
+    "engagement": {"kind": "score", "weight": 0.08, "label": "Engajamento do comprador"},
     "rapport": {"kind": "score", "weight": 0.04, "label": "Rapport"},
-    "urgency": {"kind": "score", "weight": 0.05, "label": "Urgency"},
+    "urgency": {"kind": "score", "weight": 0.05, "label": "Urgência"},
     # negative, transient
-    "objection_open": {"kind": "code", "weight": -0.14, "label": "Objection open"},
-    "prospect_disengaging": {"kind": "noul", "weight": -0.16, "label": "Prospect disengaging"},
-    "buyer_confused": {"kind": "noul", "weight": -0.05, "label": "Buyer confused"},
-    "competitor_mentioned": {"kind": "noul", "weight": -0.04, "label": "Competitor mentioned"},
-    "rep_pitching": {"kind": "noul", "weight": -0.04, "label": "Rep pitching features"},
-    "rep_talking_too_much": {"kind": "code", "weight": -0.10, "label": "Rep talking too much"},
+    "objection_open": {"kind": "code", "weight": -0.14, "label": "Objeção em aberto"},
+    "prospect_disengaging": {"kind": "noul", "weight": -0.16, "label": "Prospect se desengajando"},
+    "buyer_confused": {"kind": "noul", "weight": -0.05, "label": "Comprador confuso"},
+    "competitor_mentioned": {"kind": "noul", "weight": -0.04, "label": "Concorrente mencionado"},
+    "rep_pitching": {"kind": "noul", "weight": -0.04, "label": "Vendedor despejando funcionalidades"},
+    "rep_talking_too_much": {"kind": "code", "weight": -0.10, "label": "Vendedor falando demais"},
     # positive rep behaviour
-    "rep_discovery_question": {"kind": "noul", "weight": 0.03, "label": "Rep asked discovery question"},
+    "rep_discovery_question": {"kind": "noul", "weight": 0.03, "label": "Vendedor fez pergunta de descoberta"},
 }
 
 EMA_ALPHA = 0.40  # weight of the newest instantaneous estimate

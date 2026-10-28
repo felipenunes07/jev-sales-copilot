@@ -15,7 +15,7 @@ from typing import Any
 
 from . import constants as C
 from .engine import CallSession
-from .jev_client import JevJudge
+from .jev_client import JevJudge, make_judge
 from .replay import list_calls, load_call
 
 
@@ -87,7 +87,7 @@ async def run_call(call: dict[str, Any], judge: JevJudge, quiet: bool = False) -
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    judge = JevJudge()
+    judge = make_judge()
     try:
         calls = [load_call(c["id"]) for c in list_calls()] if args.all else [load_call(args.transcript)]
         results = [await run_call(c, judge, quiet=args.quiet) for c in calls]

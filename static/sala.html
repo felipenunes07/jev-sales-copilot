@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Chamada de vídeo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<style>
+  :root { --bg: #000; --panel: #0c0c0c; --border: #232323; --text: #ededed; --muted: #8a8a8a; --accent: #ededed; --bad: #ef4444;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+  .stage { position: fixed; inset: 0; background: #000; }
+  #remote { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #local { position: absolute; right: 16px; top: 16px; width: 28vw; max-width: 220px; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 12px; border: 2px solid var(--border); background: #111; transform: scaleX(-1); }
+  .status { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); text-align: center; color: var(--muted); font-size: 17px; padding: 0 16px; width: 100%; max-width: 440px; }
+  .status b { color: var(--text); display: block; font-size: 22px; margin-bottom: 8px; }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; gap: 14px; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, #000c); }
+  button { border: 0; border-radius: 999px; padding: 14px 20px; font-size: 15px; font-weight: 600; cursor: pointer; background: #1c1c1c; color: var(--text); }
+  button.off { background: #ef444433; color: var(--bad); }
+  button.primary { background: var(--accent); color: #000; font-size: 17px; padding: 16px 28px; }
+  button.leave { background: var(--bad); color: #fff; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <video id="remote" autoplay playsinline></video>
+  <video id="local" class="hidden" autoplay playsinline muted></video>
+  <div class="status" id="status"><b>Chamada de vídeo</b>Toque em <i>Entrar</i> e permita câmera e microfone.<br /><br /><button class="primary" id="join">Entrar na chamada</button></div>
+  <div class="bar hidden" id="bar">
+    <button id="mic">🎙 Microfone</button>
+    <button id="cam">📷 Câmera</button>
+    <button class="leave" id="leave">Sair</button>
+  </div>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const room = location.pathname.split('/').filter(Boolean).pop();
+  let ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  let pc = null, local = null, left = false, timer = null;
+
+  const status = (title, text) => { $('status').classList.remove('hidden'); $('status').innerHTML = `<b>${title}</b>${text || ''}`; };
+  const hideStatus = () => $('status').classList.add('hidden');
+  // signaling through the server over plain HTTP (post + poll)
+  const send = (m, keepalive = false) => fetch(`/sala/${room}/send?role=guest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(m), keepalive }).catch(() => {});
+
+  function newPeer() {
+    if (pc) pc.close();
+    pc = new RTCPeerConnection({ iceServers: ICE });
+    local.getTracks().forEach(t => pc.addTrack(t, local));
+    pc.onicecandidate = (e) => send({ type: 'ice', candidate: e.candidate });
+    pc.ontrack = (e) => { if ($('remote').srcObject !== e.streams[0]) $('remote').srcObject = e.streams[0]; hideStatus(); };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') status('Não foi possível conectar', 'A rede bloqueou a conexão de vídeo. Tente outra rede (por exemplo, os dados do celular).');
+    };
+  }
+
+  async function onSignal(m) {
+      if (m.type === 'offer') {
+        newPeer();
+        await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        send({ type: 'answer', sdp: answer.sdp });
+      } else if (m.type === 'ice' && pc) {
+        try { await pc.addIceCandidate(m.candidate || null); } catch (_) {}
+      } else if (m.type === 'peer-joined') {
+        status('Conectando…');
+      } else if (m.type === 'peer-left' || m.type === 'bye') {
+        if (pc) { pc.close(); pc = null; }
+        $('remote').srcObject = null;
+        status('Aguardando…', 'A outra pessoa saiu da chamada. Ela pode voltar a qualquer momento.');
+      }
+  }
+
+  async function poll() {
+    if (left) return;
+    try {
+      const r = await fetch(`/sala/${room}/poll?role=guest`);
+      if (r.status === 404) { status('Sala não encontrada', 'Este link expirou. Peça um novo link.'); return; }
+      if (r.ok) for (const m of await r.json()) await onSignal(m);
+    } catch (_) {}
+    timer = setTimeout(poll, 700);
+  }
+
+  async function connect() {
+    try { const r = await fetch(`/sala/${room}/ice`); if (r.ok) ICE = await r.json(); } catch (_) {}
+    await send({ type: 'peer-joined' });
+    poll();
+  }
+
+  $('join').onclick = async () => {
+    try {
+      local = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) {
+      status('Sem acesso à câmera ou ao microfone', 'Permita o acesso nas configurações do navegador e recarregue a página.');
+      return;
+    }
+    $('local').srcObject = local; $('local').classList.remove('hidden'); $('bar').classList.remove('hidden');
+    status('Aguardando…', 'Você entrou. A chamada começa assim que a outra pessoa estiver na sala.');
+    connect();
+  };
+  const toggle = (kind, btn) => () => { const t = local.getTracks().find(x => x.kind === kind); t.enabled = !t.enabled; $(btn).classList.toggle('off', !t.enabled); };
+  $('mic').onclick = toggle('audio', 'mic');
+  $('cam').onclick = toggle('video', 'cam');
+  window.addEventListener('beforeunload', () => { if (local && !left) send({ type: 'bye' }, true); });
+  $('leave').onclick = () => {
+    left = true; send({ type: 'bye' }, true); clearTimeout(timer);
+    if (pc) pc.close(); local.getTracks().forEach(t => t.stop());
+    $('bar').classList.add('hidden'); $('local').classList.add('hidden'); $('remote').srcObject = null;
+    status('Você saiu da chamada', 'Pode fechar esta página.');
+  };
+})();
+</script>
+</body>
+</html>
