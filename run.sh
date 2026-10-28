@@ -10,13 +10,12 @@ cd "$(dirname "$0")"
 
 # Resolve keys: existing env > ./.env > a shared secrets file (COPILOT_SECRETS_FILE, default ~/.clawdia-secrets/.env)
 SECRETS_FILE="${COPILOT_SECRETS_FILE:-$HOME/.clawdia-secrets/.env}"
-if [[ -z "${TYPESAFE_API_KEY:-}" && -z "${JEV_API_KEY:-}" ]]; then
-  if [[ -f .env ]]; then
-    set -a; # shellcheck disable=SC1091
-    source .env; set +a
-  fi
+if [[ -f .env ]]; then
+  set -a; # shellcheck disable=SC1091
+  source .env; set +a
 fi
-if [[ -z "${TYPESAFE_API_KEY:-}" && -z "${JEV_API_KEY:-}" && -f "$SECRETS_FILE" ]]; then
+has_key() { [[ -n "${OPENROUTER_API_KEY:-}${TYPESAFE_API_KEY:-}${JEV_API_KEY:-}${JEVMODEL_API_KEY:-}${BEATAPI_API_KEY:-}" ]]; }
+if ! has_key && [[ -f "$SECRETS_FILE" ]]; then
   JEV_API_KEY="$(grep -o '^JEV_API_KEY=.*' "$SECRETS_FILE" | cut -d= -f2-)"
   export JEV_API_KEY
 fi
@@ -28,8 +27,8 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" && -f "$SECRETS_FILE" ]]; then
   ANTHROPIC_API_KEY="$(grep -o '^ANTHROPIC_API_KEY=.*' "$SECRETS_FILE" | cut -d= -f2-)"
   [[ -n "$ANTHROPIC_API_KEY" ]] && export ANTHROPIC_API_KEY
 fi
-if [[ -z "${TYPESAFE_API_KEY:-}" ]]; then
-  echo "No API key. Set TYPESAFE_API_KEY (or JEV_API_KEY), or copy .env.example to .env." >&2
+if ! has_key; then
+  echo "Sem chave de API. Copie .env.example para .env e preencha OPENROUTER_API_KEY (ou TYPESAFE_API_KEY)." >&2
   exit 1
 fi
 

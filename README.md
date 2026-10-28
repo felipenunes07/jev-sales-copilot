@@ -1,218 +1,132 @@
-# Sales Copilot — live closing probability with Jev
+# Sales Copilot — probabilidade de fechamento ao vivo com o Jev
 
-A live sales-call copilot. As each utterance of a call arrives (replayed transcript, typed text, or the
-browser microphone), the app asks TypeSafe's **Jev** (`jev-1.13.0`, a System One model that returns typed
-decisions instead of text) ~37 atomic questions in **one request**, and within a few hundred milliseconds updates:
+Copiloto para calls de vendas. A cada fala da conversa, o app pergunta ao **Jev** (modelo *System One* da TypeSafe,
+que devolve decisões tipadas em vez de texto) cerca de 37 perguntas objetivas numa única requisição e, em menos de um
+segundo, atualiza:
 
-1. **Closing probability** (0–100 %) as a live line chart — the hero visual.
-2. **Live signals** — what is going well / badly right now (buying signal, pain identified, budget discussed,
-   decision maker, timeline, objection open, competitor, buyer confusion, rep pitching, rep talking too much, …).
-3. **Call stage** (opening, discovery, qualification, pitch/demo, objection handling, pricing, closing, next steps).
-4. **Open objection type** (price, timing, authority, need, trust, competitor) — speculative, confidence-gated.
-5. **Next best move** — a coaching card picked by Jev from a hand-written 15-move playbook, with the best-fitting
-   pre-written phrasing highlighted. Jev picks; code shows the text. Gated on confidence ("listening…" otherwise).
-6. **Talk ratio and pace**, computed in code from the transcript.
-7. **Tailored phrasing** (optional) — when the move changes, a small fast LLM (Claude Haiku 4.5) rewrites the chosen
-   playbook line for *this* conversation, off the critical path; Jev then judges the sentence and code drops it if it
-   invents a fact. The generic line is always shown first.
+1. **Probabilidade de fechamento** (0–100 %), num gráfico ao vivo.
+2. **Etapa da call** — abertura, descoberta, qualificação, apresentação, objeções, preço, fechamento, próximos passos.
+3. **Próxima melhor jogada** — uma das 15 jogadas do playbook, com a frase sugerida ("diga: …").
+4. **Objeção em aberto** — preço, timing, autoridade, necessidade, confiança ou concorrente.
+5. **Sinais ao vivo** — dor identificada, orçamento, decisor, prazo, sinal de compra, cliente desengajando, vendedor
+   falando demais e outros.
+6. **Frase personalizada** (opcional) — um LLM pequeno reescreve a frase do playbook para *esta* conversa, e o Jev
+   confere se ela não inventou nenhum dado.
 
-Jev never generates text. All arithmetic (composite score, EMA, talk ratio, durations, fact persistence) lives in code.
-The only generative call is the optional tailored phrasing, and it is gated, verified and never blocking.
+O Jev não escreve texto: ele só responde às perguntas. Toda a conta (probabilidade, médias, proporção de fala) é feita
+no código, em `copilot/engine.py`.
 
-## Quick start
+> Baseado em [moritzkremb/jev-sales-copilot](https://github.com/moritzkremb/jev-sales-copilot). Esta versão está em
+> português, usa o Jev pelo OpenRouter, traz o playbook da Playbook Lab, chamada de vídeo e deploy na Vercel.
 
-```bash
-git clone https://github.com/moritzkremb/jev-sales-copilot.git && cd jev-sales-copilot
-cp .env.example .env            # put TYPESAFE_API_KEY=... in it (JEV_API_KEY also accepted)
-                                # optional: ANTHROPIC_API_KEY=... enables tailored phrasing
-./run.sh                        # → http://localhost:8000
-```
+## Como rodar no seu computador
 
-`run.sh` resolves the keys from the environment, then `.env`, then an optional shared secrets file (`COPILOT_SECRETS_FILE`,
-lines `JEV_API_KEY=…` / `ANTHROPIC_API_KEY=…`).
-It never prints a key. Keys stay server-side; the browser only talks to the local WebSocket.
+Você precisa de:
 
-Other entry points:
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (gerenciador de Python; ele instala o Python 3.13 sozinho);
+- uma chave do [OpenRouter](https://openrouter.ai/settings/keys) com crédito.
 
 ```bash
-./run.sh cli --transcript good              # headless replay of data/calls/good.json, prints the timeline
-./run.sh cli --transcript my_call.txt       # plain text: one "rep: …" / "prospect: …" per line, optional "[secs]" prefix
-./run.sh cli --all --out eval/timelines.json
-./run.sh test                               # unit + server + real-API integration + e2e (needs the key)
-COPILOT_SKIP_LIVE=1 ./run.sh test           # offline: unit + server tests only
+git clone https://github.com/felipenunes07/jev-sales-copilot.git
+cd jev-sales-copilot
+cp .env.example .env      # abra o .env e cole sua OPENROUTER_API_KEY
 ```
 
-Requirements: Python ≥ 3.13 and [uv](https://docs.astral.sh/uv/). No Node build step; the UI is one HTML file and loads Chart.js from a CDN.
+Depois:
 
-## Modes
+- **Windows:** dê dois cliques em `iniciar.bat`. O navegador abre em http://localhost:8000. Para parar, feche a janela preta.
+- **Mac/Linux:** `./run.sh` e abra http://localhost:8000.
 
-| Mode | How | Notes |
+### Quanto custa
+
+Com o OpenRouter, uma call de 30 minutos custa menos de US$ 0,05 no Jev, menos de US$ 0,01 em frases personalizadas e
+cerca de US$ 0,05 por hora de transcrição na chamada de vídeo. Respostas do Jev ficam guardadas em `.cache/jev`:
+repetir uma call já analisada é de graça.
+
+## Modos (abas no topo)
+
+| Aba | Para que serve | Quem fala é identificado… |
 | --- | --- | --- |
-| **Replay** (primary, used by tests and the demo) | pick one of the three hand-written calls, set speed (0.5×–20×), Play / Pause / Stop | utterances stream over a WebSocket with their real gaps (capped at 6 s) so the chart animates |
-| **Video** (the tangible demo) | pick a real recorded call, **Load video**, then Play — the YouTube player is embedded and the copilot fires each utterance the moment it finishes being spoken | you see exactly what the rep would have seen in real time. Scrub freely: seeking back resets the session and fast-forwards the copilot to the new position; seeking forward catches up |
-| **Live mic** | Chrome only — Web Speech API (`webkitSpeechRecognition`, continuous, interim results) | there is no speaker diarization in the browser: toggle **Rep / Prospect** (or press `S`) before each turn. Each final recognition result is sent as one utterance |
-| **Type** | type an utterance, pick the speaker, Enter | the speaker alternates automatically after each send |
+| **Replay** | Toca uma call de exemplo, com velocidade ajustável | automaticamente (vem na transcrição) |
+| **Vídeo** | Assiste a uma call gravada com o copiloto analisando no tempo do vídeo; pode avançar e voltar | automaticamente |
+| **Microfone ao vivo** | Transcreve o seu microfone em português (só no Chrome) | manualmente: aperte **S** a cada troca |
+| **Digitar** | Escreve as falas para treinar | você escolhe vendedor/prospect |
+| **📹 Chamada de vídeo** | Cria uma sala, você manda o link ao cliente e faz a call ali mesmo | automaticamente: seu microfone = vendedor, áudio do cliente = prospect |
 
-The three replay calls (`data/calls/*.json`, 38–42 utterances, `rep`/`prospect`, timestamps in seconds):
+**Chamada de vídeo no seu computador:** para o link funcionar fora da sua máquina, instale o
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+(`winget install --id Cloudflare.cloudflared`). O app cria um link público e gratuito na hora. Na Vercel isso não é
+necessário. Use fone de ouvido.
 
-- `good` — Summit HVAC: discovery-led, pain quantified, budget + decision process surface, closes with a verbal yes (ends ≈ 90 %).
-- `bad` — Bluewater Plumbing: feature dump, unhandled price objection, competitor never addressed, prospect disengages (ends ≈ 6 %).
-- `mixed` — Ridgeline Electric: hostile start and price pushback (dips to ≈ 16 %), rep pivots to discovery, quantifies pain, reframes price, agrees a pilot (ends ≈ 80 %).
+## Adaptar para o seu negócio
 
-Plus one **real recorded call** for Video mode:
+- **Playbook** (`data/playbook.json`): as 15 jogadas, cada uma com três frases. O `what`/`not_for` em inglês é o que o
+  Jev lê para escolher a jogada; o `what_pt`, o `title` e as `phrasings` são o que aparece na tela. As frases atuais
+  são da Playbook Lab (Sales OS, squad de automação, prospecção no LinkedIn). Troque pelas suas.
+- **Pesos e limites** (`copilot/constants.py`): peso de cada sinal na probabilidade, limiares de confiança e o texto de
+  todas as perguntas feitas ao Jev. Os pesos também podem ser testados na tela, em "Pesos do composto", sem novas
+  chamadas ao Jev.
 
-- `cloudtalk` — [CloudTalk's published discovery + BANT call](https://www.youtube.com/watch?v=uovWCGCl2-s) (9 min, 48 utterances): Nick qualifies Bradford,
-  an SDR manager dialing from mobile phones and logging into HubSpot by hand. Transcribed locally with faster-whisper (`small.en`), speakers
-  labeled by hand, `t`/`t_end` aligned to the YouTube timeline; the JSON carries `"video": {"youtube_id": …}`. In a real run the copilot
-  goes 26 % → 80 %, locks pain, budget, decision maker, timeline and next step, and dips when Bradford says he is not the decision maker.
+### Adicionar uma call gravada (aba Vídeo)
 
-To add your own recording: `yt-dlp -f ba -o call.webm <url>`, `ffmpeg -i call.webm -ar 16000 -ac 1 call.wav`, transcribe (faster-whisper works
-without torch: `uv run --with faster-whisper python -c '…'`), group segments into `rep`/`prospect` turns with `t` and `t_end`, add `video.youtube_id`,
-drop the file in `data/calls/`.
+Cada call é um JSON em `data/calls/` com as falas (`speaker`: `rep` ou `prospect`, `text`, `t` e `t_end` em segundos) e
+o vídeo em `"video": {"file": "nome.mp4"}` (arquivo em `data/media/`), `{"url": "https://…"}` ou
+`{"youtube_id": "…"}`. Veja `data/calls/cloudtalk.json` como exemplo.
 
-## Architecture
+**Calls reais de clientes não devem ir para o GitHub** (este repositório é público). Deixe o JSON e o vídeo fora do
+git (veja `.gitignore`) e, em produção, coloque-os num armazenamento privado e informe o endereço do JSON em
+`PRIVATE_CALLS_URLS`.
 
-```
-static/index.html          single-page UI (Chart.js), WebSocket client, Web Speech API, YouTube IFrame sync for Video mode
-copilot/server.py          FastAPI: /, /api/*, /ws (one CallSession per tab; replay task, live utterances, weight changes)
-copilot/engine.py          CallSession: state window, feature extraction, composite + EMA, facts, objection state,
-                           coaching gate, talk ratio / pace, sensitivity, recompute-without-Jev
-copilot/jev_client.py      async wrapper over typesafe-sdk; logs model / usage / latency / request id; cost accounting
-copilot/personalize.py     optional tailored phrasing: trigger rule, prompt, Anthropic HTTP client, output cleaning, Jev verification
-copilot/constants.py       THE reviewable module: model pin, all 37 questions, weights, stage priors, thresholds, LLM settings
-data/playbook.json         15 coaching moves: what / not_for (→ Choice option descriptions) + 3 phrasings each
-data/calls/*.json          the three hand-written replay transcripts + cloudtalk.json (real recording, video-aligned)
-copilot/cli.py             headless replay → terminal timeline / eval JSON
-copilot/replay.py          transcript loading (JSON or text)
-tests/                     unit (mock Jev), server (mock Jev), integration (real API), e2e (real API)
-eval/timelines.json        probability per utterance for the three calls, from a real run
-eval/integration_report.json  per-case observed values from the labeled-utterance test
-```
+## Publicar na Vercel
 
-### One request per utterance (speculative fan-out)
+O projeto já vem pronto para a Vercel (`app.py`, `vercel.json`, `.vercelignore`).
 
-State sent to Jev (kept small on purpose — a rolling window):
+1. Importe o repositório num projeto da Vercel (o framework detectado é **FastAPI**).
+2. Em **Settings → Environment Variables**, defina:
+   - `OPENROUTER_API_KEY` — obrigatória;
+   - `APP_PASSWORD` e `APP_SECRET` — para exigir senha da equipe; **ou** `OPEN_ACCESS=1` para deixar sem login
+     (qualquer pessoa com o endereço usa o app e gasta a sua chave);
+   - `PRIVATE_CALLS_URLS` — opcional, endereços dos JSON de calls privadas.
+3. Para a **Chamada de vídeo**, adicione **Upstash Redis** pelo Marketplace da Vercel (plano grátis). Sem ele, você e
+   o cliente podem cair em servidores diferentes e a chamada não conecta.
 
-```json
-{
-  "call_facts": {"duration_min": 5.7, "talk_ratio_rep": 0.54, "stage_history": ["opening","discovery"],
-                 "known_facts": ["pain_identified","budget_discussed"], "objection": {"open": true, "type": "price"}},
-  "recent_transcript": [{"t": "05:12", "speaker": "rep", "text": "…"}, "… last 12 utterances …"],
-  "latest_utterance": {"t": "05:45", "speaker": "prospect", "text": "…"}
-}
-```
+Como a Vercel encerra conexões longas (cerca de 5 minutos no plano grátis), o navegador reconecta sozinho e devolve a
+call ao servidor, que continua a análise de onde parou sem chamar o Jev de novo.
 
-Questions (all in `copilot/constants.py`, every one written out in full and referencing `` `latest_utterance.text` `` or
-`` `recent_transcript` ``):
+## Outros provedores do Jev
 
-- **Nouls (16)** — prospect-turn: `buying_signal`, `commitment`, `next_step_agreed`, `prospect_objecting`, `prospect_accepts`,
-  `prospect_disengaging`, `buyer_confused`, `prospect_asked_price`; rep-turn: `rep_discovery_question`, `rep_pitching`;
-  either: `next_step_proposed`, `competitor_mentioned`; window facts: `pain_identified`, `budget_discussed`,
-  `decision_maker_identified`, `timeline_known`. Each has `{true, false}` criteria with examples.
-- **Scores (3)** — `rapport`, `engagement`, `urgency`; 3 levels each, described as concrete situations with `signals`.
-- **Choices (3 + 15)** — `stage` (8 options, `{what, not_for}`), `objection_type` (6 + `none`), `next_move` (15 playbook
-  moves, `{what, not_for}` from the playbook), and one speculative `phrasing::<move>` Choice per move over its 3 lines.
+O app escolhe o provedor pela chave que encontrar, nesta ordem: `OPENROUTER_API_KEY` (recomendado), `BEATAPI_API_KEY`,
+`JEVMODEL_API_KEY` (ou uma chave `sk-…` do jevmodel.org) e `TYPESAFE_API_KEY` (API oficial). Com chaves de cota
+gratuita pequena, `COPILOT_ECONOMY=1` corta o número de perguntas por fala pela metade. Detalhes em `.env.example`.
 
-Speaker-specific Nouls are asked on every turn and **masked in code** when the speaker does not match (Jev is literal;
-conditionals belong in code). ~7,500 input tokens per request, ≈ $0.0003.
-
-### Closing probability = code, not prompt
+## Estrutura
 
 ```
-inst = STAGE_PRIOR[stage] + Σ weight_i · x_i
-    noul / fact / code signals: x ∈ [0,1], contribution = w·x
-    scores: x = score/(levels−1), contribution = w·(x−0.5)·2   (middle level is neutral)
-p_t  = 0.40 · inst + 0.60 · p_{t−1}                           (EMA; clamped to [0.03, 0.95])
+static/index.html      tela do copiloto (Chart.js, WebSocket, microfone, vídeo, chamada)
+static/sala.html       página que o cliente abre na chamada de vídeo
+copilot/server.py      FastAPI: páginas, WebSocket do copiloto, sala da chamada, login
+copilot/engine.py      estado da call, sinais, probabilidade, objeção, próxima jogada, reconexão
+copilot/constants.py   perguntas ao Jev, pesos, limiares, modelos
+copilot/jev_client.py  clientes do Jev (OpenRouter, jevmodel.org, BeatAPI, TypeSafe) e cache
+copilot/personalize.py frase personalizada (LLM) verificada pelo Jev
+copilot/videocall.py   salas assinadas, sinalização, túnel, transcrição da chamada
+copilot/auth.py        login com senha (ou acesso aberto)
+data/playbook.json     as 15 jogadas e as frases
+data/calls/*.json      calls de exemplo
+tests/                 testes (offline por padrão)
 ```
 
-All weights, priors and the EMA α are in `SIGNAL_WEIGHTS` / `STAGE_PRIOR` / `EMA_ALPHA` and are shown in the UI as an
-editable table. **Applying new weights recomputes the whole timeline from the stored raw answers with zero new Jev
-calls** — "change a coefficient, not a prompt". The **sensitivity panel** lists the three contributions that moved most on the last utterance.
-
-Durable facts (`pain_identified`, `budget_discussed`, `decision_maker_identified`, `timeline_known`, `next_step_agreed`)
-persist in code once a Noul ≥ 0.70 (🔒 in the UI) and are fed back to Jev via `call_facts.known_facts`, so
-"ask about budget" stops being suggested once budget is known.
-
-### Confidence gating
-
-| Decision | Gate |
-| --- | --- |
-| show coaching card | `next_move.confidence ≥ 0.35`, else "listening…" (leaning move shown greyed) |
-| highlight a phrasing | `phrasing::<move>.confidence ≥ 0.30` |
-| open objection | `prospect_objecting ≥ 0.60` on a prospect turn; type from `objection_type` if `confidence ≥ 0.40` |
-| clear objection | prospect turn with `prospect_accepts` / `buying_signal` / `commitment` / `next_step_agreed` ≥ 0.60 **and** `prospect_disengaging < 0.60`; or 8 utterances without re-raising |
-| persist a fact | Noul ≥ 0.70 |
-| light a signal | Noul ≥ 0.60 |
-
-### Tailored phrasing: Jev decides, a small LLM writes one sentence, Jev checks it
-
-The playbook lines are generic by construction ("how many *jobs* slip" on a call about *dials*). With `ANTHROPIC_API_KEY`
-set, the server adds one sentence written for this exact moment. The division of labour keeps the "nothing a human
-didn't vet reaches the rep" property as far as possible:
-
-| Step | Who | Detail |
-| --- | --- | --- |
-| which move | Jev | `next_move` Choice, gated on confidence ≥ 0.35, exactly as before |
-| whether to call the LLM | code | only when the un-gated move **changed**, a **new fact** locked in, or the same move has held for 8 utterances; cooldown 2 utterances; three moves whose generic line is already fine are skipped (`PERSONALIZE_SKIP_MOVES`) |
-| write the sentence | Claude Haiku 4.5 | last 6 utterances + known facts + the move's `what` and 3 generic lines as style anchors → one sentence, ≤ 32 words (55 for summaries), no invented numbers/names/features; `temperature 0.4`, ~900 input / ~30 output tokens, ≈ $0.0009 |
-| validate | code | one line, quotes stripped, length-capped, discarded if the model hit `max_tokens` |
-| verify | Jev | two Nouls on `{candidate_line, move, recent_transcript, known_facts}`: `invents_fact` (drop if ≥ 0.5) and `on_move` (drop if < 0.5) |
-| stale check | code | dropped if the call has moved to a different move (or "listening…") since the request started |
-| show | UI | `say (tailored): …` appears above the generic lines, with model, latency, Jev scores and trigger; dropped candidates are shown struck through so you can see the guardrail work |
-
-Latency is off the critical path: Jev's ~350 ms answer updates everything immediately with the generic line; the
-tailored line lands ~1 s later via a separate `phrasing` WebSocket message. In a real run of the CloudTalk call the LLM
-was called 7 times over 48 utterances (≈ $0.006), showed 2 lines, and dropped 5: one for inventing a feature nobody had
-mentioned (`invents_fact 0.80`), two summaries for length (since fixed with a per-move cap), and two as stale because at
-50× replay speed the move changed before the LLM returned; at real speed that is rare.
-
-Without the key the app behaves exactly as before. `tests/test_personalize.py` covers the trigger rule, output cleaning
-and the server round-trip with a mock LLM (no network).
-
-## Tests and evaluation
+## Testes
 
 ```bash
-./run.sh test                    # everything (needs API key; ~1 min, ≈ $0.05 of Jev usage)
-uv run pytest tests/test_engine_unit.py tests/test_server.py -q     # offline
+uv run pytest -q tests/ --ignore=tests/test_integration_jev.py --ignore=tests/test_e2e_replay.py   # offline
+./run.sh test                                                                                     # inclui testes com a API real
 ```
 
-- `tests/test_engine_unit.py` (25) — composite arithmetic and centering, clamping, EMA, talk ratio, pace window, fact
-  persistence + feedback into state, speaker masking, objection lifecycle (open / not-cleared-by-disengaging / clear /
-  expire), coaching gate, talk-ratio penalty, recompute-without-Jev, sensitivity, state window shape, error resilience,
-  transcript loading, question completeness.
-- `tests/test_server.py` (3) — HTTP endpoints; WebSocket replay (hello → reset → updates), pause, `set_weights` →
-  `recomputed` with no extra Jev calls; live utterances; reset; unknown message → error.
-- `tests/test_personalize.py` (11) — trigger rule (move change / new fact / refresh / cooldown / gate / skip list), output
-  cleaning, prompt contents, `phrasing` round-trip with a mock LLM and one call per move change, silent when no key.
-- `tests/test_integration_jev.py` (real API) — 19 hand-labeled utterances (clear price/timing/authority objection,
-  buying signal, commitment, feature dump, budget, decision maker, next-step proposed/agreed, discovery question,
-  disengaging, confusion, competitor, timeline, pain, acceptance, neutral price question, warm opening), 56 threshold
-  checks in total. Requires ≥ 90 % pass; writes `eval/integration_report.json`. **Last run: 56/56 = 100 %.**
-- `tests/test_e2e_replay.py` (real API) — replays all three calls, writes `eval/timelines.json`, asserts good ends ≥ 0.70
-  and > bad + 0.30, bad ends ≤ 0.40 with a price objection flagged and the "stop talking" coaching fired, mixed dips
-  ≤ 0.30 in its first half then ends ≥ 0.65; checks model pin, zero errors, latency p95 and cost per call.
+## Limitações
 
-Last real run (see `eval/timelines.json`):
-
-| call | final p | min | facts persisted | Jev latency mean / p95 | tokens | cost |
-| --- | --- | --- | --- | --- | --- | --- |
-| good | 0.91 | 0.26 | pain, budget, decision maker, timeline, next step | 345 ms / 522 ms | 330,109 | $0.0139 |
-| bad | 0.07 | 0.07 | competitor, budget (no next step ever agreed) | 391 ms / 532 ms | 298,774 | $0.0125 |
-| mixed | 0.80 | 0.15 | pain, budget, decision maker, timeline, next step | 382 ms / 525 ms | 330,793 | $0.0139 |
-
-Latency is measured client-side from macOS including TLS and network; the first request of a process is ~0.9 s (connection setup).
-
-## Limitations
-
-- **No diarization** in live-mic mode: the Web Speech API returns one stream; you mark who is speaking. Chrome only.
-- Jev sees a **rolling 12-utterance window** plus a compact fact list, not the whole call. That keeps it fast and literal;
-  facts detected earlier persist in code, not in the model's context.
-- `objection_type` is asked speculatively on every turn and will name a type even for a neutral price question — that is
-  why an objection only opens when the separate `prospect_objecting` Noul fires.
-- Weights and thresholds were tuned on the three hand-written calls and 19 labeled utterances; treat them as starting
-  points for real call data. Composite probability is a coaching signal, not a calibrated forecast.
-- The phrasing Choices add ~1,900 tokens and ~20 ms per request; drop them from `QUESTIONS` if cost matters more than the "say this" line.
-- The tailored line is the one place a generative model can be wrong. Jev's `invents_fact` check is conservative (it dropped
-  a line for mentioning "automatic note summaries" that the prospect had in fact asked about), so expect some good lines to be
-  discarded. It is also the one external dependency beyond Jev; without the key the feature is simply off.
-- Model is pinned to `jev-1.13.0`; re-run the integration test when moving to a newer version.
+- O microfone ao vivo não identifica quem fala; use a Chamada de vídeo para isso.
+- A probabilidade é um sinal para orientar o vendedor, não uma previsão calibrada. Os pesos foram ajustados com
+  poucas calls; trate-os como ponto de partida.
+- O Jev lê as últimas 12 falas e uma lista de fatos já confirmados, não a call inteira.
+- Em redes corporativas que bloqueiam vídeo ponto a ponto, configure um servidor TURN em `ICE_SERVERS`.
