@@ -27,8 +27,8 @@ Você precisa de:
 - uma chave do [OpenRouter](https://openrouter.ai/settings/keys) com crédito.
 
 ```bash
-git clone https://github.com/felipenunes07/jev-sales-copilot.git
-cd jev-sales-copilot
+git clone https://github.com/felipenunes07/playbook-sales-copilot.git
+cd playbook-sales-copilot
 cp .env.example .env      # abra o .env e cole sua OPENROUTER_API_KEY
 ```
 
