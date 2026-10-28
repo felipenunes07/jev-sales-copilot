@@ -21,7 +21,7 @@ from . import constants as C
 from .engine import CallSession
 from .jev_client import JevJudge, make_judge, resolve_api_key
 from .personalize import PersonalizeState, make_personalizer, Personalizer, resolve_llm_key, should_personalize, verify_with_jev
-from .replay import list_calls, load_call
+from .replay import list_calls, load_call, load_remote_calls
 from .videocall import SIGNAL_TYPES, Signaling, Tunnel, find_cloudflared, is_local, make_store, make_transcriber, new_room, room_valid
 from . import auth
 
@@ -47,6 +47,8 @@ def ensure_state(app: FastAPI) -> None:
     app.state.transcriber = make_transcriber()
     app.state.signaling = Signaling(make_store())
     app.state.tunnel = Tunnel(int(os.environ.get("PORT", "8000")))
+    if os.environ.get("PRIVATE_CALLS_URLS"):
+        log.info("private calls loaded: %s", load_remote_calls(os.environ["PRIVATE_CALLS_URLS"]))
     app.state.ready = True
 
 

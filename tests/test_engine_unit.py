@@ -434,3 +434,22 @@ async def test_restore_rebuilds_the_call_without_jev(mock_judge_factory, helpers
     assert after["probability"] == before["probability"]
     assert after["facts"] == before["facts"] and after["stage"] == before["stage"]
     assert [x["probability"] for x in after["timeline"]] == [x["probability"] for x in before["timeline"]]
+
+
+def test_private_calls_load_from_urls(monkeypatch):
+    import copilot.replay as R
+
+    class Resp:
+        def raise_for_status(self):
+            return self
+
+        def json(self):
+            return {"id": "secret_call", "title": "Real call", "video": {"url": "https://blob.example/v.mp4"},
+                    "utterances": [{"t": 0, "speaker": "Rep", "text": "Oi"}, {"t": 3, "speaker": "prospect", "text": "Olá"}]}
+
+    monkeypatch.setattr("httpx.get", lambda *a, **k: Resp())
+    monkeypatch.setattr(R, "_REMOTE", {})
+    assert R.load_remote_calls("https://blob.example/call.json, ") == ["secret_call"]
+    assert "secret_call" in [c["id"] for c in R.list_calls()]
+    call = R.load_call("secret_call")
+    assert call["utterances"][0]["speaker"] == "rep" and call["video"]["url"].endswith("v.mp4")

@@ -311,7 +311,7 @@
       const sel = $('call-select'); sel.innerHTML = '';
       m.calls.forEach(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = `${c.title} (${c.utterances} falas, ${Math.round(c.duration_s / 60)} min)`; sel.appendChild(o); });
       const vsel = $('video-select'); vsel.innerHTML = '';
-      m.calls.filter(c => c.video && (c.video.youtube_id || c.video.file)).forEach(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = `${c.title} (${Math.round(c.duration_s / 60)} min)`; vsel.appendChild(o); });
+      m.calls.filter(c => c.video && (c.video.youtube_id || c.video.file || c.video.url)).forEach(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = `${c.title} (${Math.round(c.duration_s / 60)} min)`; vsel.appendChild(o); });
       if (!vsel.options.length) { const o = document.createElement('option'); o.textContent = 'nenhuma call com vídeo em data/calls'; o.disabled = true; vsel.appendChild(o); }
       renderStages(null); renderWeights(m.weights); renderSignalsSkeleton(m.weights);
       if (!m.has_api_key) toast('O servidor não tem chave de API. Defina TYPESAFE_API_KEY e reinicie.');
@@ -589,10 +589,10 @@
   $('btn-video-load').addEventListener('click', async () => {
     const id = $('video-select').value; if (!id) return;
     const call = await (await fetch('/api/calls/' + id)).json();
-    if (!call.video || !(call.video.youtube_id || call.video.file)) { toast('Esta call não tem vídeo anexado.'); return; }
+    if (!call.video || !(call.video.youtube_id || call.video.file || call.video.url)) { toast('Esta call não tem vídeo anexado.'); return; }
     video.call = call;
     $('video-card').classList.add('on');
-    $('video-sub').textContent = `${call.title} · ${call.utterances.length} falas · ` + (call.video.file ? 'arquivo local' : `YouTube ${call.video.youtube_id}`);
+    $('video-sub').textContent = `${call.title} · ${call.utterances.length} falas · ` + (call.video.youtube_id ? `YouTube ${call.video.youtube_id}` : 'gravação');
     if (video.player) { video.player.destroy(); video.player = null; }
     $('yt-player').innerHTML = '';
     videoReset(0);
@@ -606,8 +606,10 @@
         else if (e.data === PS.ENDED) { stopVideoLoop(); videoTick(1e9); $('video-progress').textContent += ' · concluído'; }
       },
     };
-    if (call.video.file) {
-      video.player = filePlayer($('yt-player'), '/media/' + encodeURIComponent(call.video.file), call.video.start || 0, events);
+    if (call.video.file || call.video.url) {
+      // a hosted copy (e.g. Vercel Blob) when the call has one, else the recording in data/media on this machine
+      const src = call.video.url || '/media/' + encodeURIComponent(call.video.file);
+      video.player = filePlayer($('yt-player'), src, call.video.start || 0, events);
       return;
     }
     await loadYouTubeApi();
